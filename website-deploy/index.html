@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>SGA FILE RENAME</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="app-header">
+        <div>
+          <p class="eyebrow">Browser website</p>
+          <h1 class="brand-title">
+            <img src="assets/logo.png" alt="" class="brand-logo">
+            <span>SGA FILE RENAME</span>
+          </h1>
+          <p class="header-copy">Drop or choose a main folder, select parent folders, review the rename list, then download the updated folder as a ZIP.</p>
+        </div>
+        <div class="library-status" id="libraryStatus">Checking libraries...</div>
+      </header>
+
+      <section class="upload-hero">
+        <div id="dropZone" class="drop-zone" tabindex="0">
+          <div class="drop-icon" aria-hidden="true">+</div>
+          <div class="drop-copy">
+            <h2>Drop main folder</h2>
+            <p>Folder names stay unchanged. Only selected parent folders are processed.</p>
+            <button id="chooseFolderButton" class="inline-folder-choice" type="button">Choose Main Folder</button>
+            <input id="folderInput" class="folder-input" type="file" webkitdirectory directory multiple>
+          </div>
+        </div>
+        <button id="clearButton" class="button secondary clear-upload-button" type="button">Clear</button>
+      </section>
+
+      <section class="workflow-layout">
+        <aside class="side-column">
+          <section class="panel folder-panel">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">Step 1</p>
+                <h2>Choose Parent Folders</h2>
+              </div>
+              <span id="previewCount" class="pill">0 files</span>
+            </div>
+            <div id="folderSummary" class="folder-summary muted">No folder loaded.</div>
+            <div class="button-row split">
+              <button id="selectAllButton" class="button compact" type="button" disabled>Select All</button>
+              <button id="deselectAllButton" class="button compact" type="button" disabled>Deselect All</button>
+            </div>
+            <div id="parentList" class="parent-list" aria-live="polite"></div>
+          </section>
+
+          <section class="panel action-panel">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">Step 3</p>
+                <h2>Create ZIP</h2>
+              </div>
+            </div>
+            <div class="primary-action-stack">
+              <button id="renameButton" class="button primary wide" type="button" disabled>Rename Files</button>
+              <button id="downloadButton" class="button success wide" type="button" disabled>Download ZIP</button>
+            </div>
+            <p id="zipInfo" class="zip-info muted">ZIP will be available after processing.</p>
+          </section>
+
+          <section class="panel log-panel">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">Log</p>
+                <h2>Activity and Errors</h2>
+              </div>
+              <button id="clearLogButton" class="button compact" type="button">Clear</button>
+            </div>
+            <div id="messageLog" class="message-log" aria-live="polite"></div>
+          </section>
+        </aside>
+
+        <section class="main-column">
+          <section class="panel preview-panel">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">Step 2</p>
+                <h2>Review Planned Renames</h2>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Parent folder</th>
+                    <th>Secondary folder</th>
+                    <th>Original file name</th>
+                    <th>New file name</th>
+                  </tr>
+                </thead>
+                <tbody id="previewBody">
+                  <tr>
+                    <td colspan="4" class="empty-state">Load a folder to preview renames.</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="panel progress-panel">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">Progress</p>
+                <h2>Current Run</h2>
+              </div>
+              <div class="status-chip" id="statusText">Waiting for a folder.</div>
+            </div>
+
+            <div class="progress-stack">
+              <div class="status-line">
+                <span>Overall progress</span>
+                <span id="percentText">0%</span>
+              </div>
+              <div class="progress-track" aria-label="Progress">
+                <div id="progressBar" class="progress-bar"></div>
+              </div>
+              <div class="metrics">
+                <div><strong id="totalFiles">0</strong><span>Total files detected</span></div>
+                <div><strong id="completedFiles">0</strong><span>Files completed</span></div>
+                <div><strong id="remainingFiles">0</strong><span>Files remaining</span></div>
+                <div><strong id="elapsedTime">00:00</strong><span>Elapsed time</span></div>
+                <div><strong id="etaTime">--:--</strong><span>Estimated time remaining</span></div>
+                <div><strong id="filesPerSecond">0.0</strong><span>Files per second</span></div>
+                <div><strong id="heicSpeed">0.0</strong><span>HEIC conversions/sec</span></div>
+              </div>
+            </div>
+          </section>
+        </section>
+      </section>
+    </main>
+
+    <script src="vendor/jszip.min.js"></script>
+    <script>
+      if (!window.JSZip) {
+        document.write('<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"><\/script>');
+      }
+    </script>
+    <script src="vendor/heic2any.min.js"></script>
+    <script>
+      if (!window.heic2any) {
+        document.write('<script src="https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js"><\/script>');
+      }
+    </script>
+    <script src="app.js"></script>
+  </body>
+</html>
