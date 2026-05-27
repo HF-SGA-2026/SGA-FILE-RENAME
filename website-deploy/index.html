@@ -3,8 +3,8 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>SGA FILE RENAME</title>
-    <link rel="stylesheet" href="styles.css">
+    <title>SGA File Nexus</title>
+    <link rel="stylesheet" href="styles.css?v=unrestricted-file-picker">
   </head>
   <body>
     <main class="app-shell">
@@ -13,9 +13,10 @@
           <p class="eyebrow">Browser website</p>
           <h1 class="brand-title">
             <img src="assets/logo.png" alt="" class="brand-logo">
-            <span>SGA FILE RENAME</span>
+            <span>SGA File Nexus</span>
           </h1>
-          <p class="header-copy">Drop or choose a main folder, select parent folders, review the rename list, then download the updated folder as a ZIP.</p>
+          <p class="product-name">Backup &amp; Duplicate Discarder</p>
+          <p class="header-copy">Drop or choose a project folder, select folder groups, review backed-up files across mixed formats, then move selected files into a restorable Review Bin.</p>
         </div>
         <div class="library-status" id="libraryStatus">Checking libraries...</div>
       </header>
@@ -25,21 +26,21 @@
           <div class="drop-icon" aria-hidden="true">+</div>
           <div class="drop-copy">
             <h2>Drop main folder</h2>
-            <p>Folder names stay unchanged. Only selected parent folders are processed.</p>
+            <p>Folder names stay unchanged. Images, documents, CAD, design, video, and other files are scanned.</p>
             <button id="chooseFolderButton" class="inline-folder-choice" type="button">Choose Main Folder</button>
             <input id="folderInput" class="folder-input" type="file" webkitdirectory directory multiple>
+            <input id="fileInput" class="folder-input" type="file" multiple>
           </div>
         </div>
         <button id="clearButton" class="button secondary clear-upload-button" type="button">Clear</button>
       </section>
 
       <section class="workflow-layout">
-        <aside class="side-column">
-          <section class="panel folder-panel">
+        <section class="panel folder-panel">
             <div class="section-heading">
               <div>
                 <p class="eyebrow">Step 1</p>
-                <h2>Choose Parent Folders</h2>
+                <h2>Folders &amp; Flags</h2>
               </div>
               <span id="previewCount" class="pill">0 files</span>
             </div>
@@ -51,103 +52,186 @@
             <div id="parentList" class="parent-list" aria-live="polite"></div>
           </section>
 
-          <section class="panel action-panel">
-            <div class="section-heading">
-              <div>
-                <p class="eyebrow">Step 3</p>
-                <h2>Create ZIP</h2>
-              </div>
-            </div>
-            <div class="primary-action-stack">
-              <button id="renameButton" class="button primary wide" type="button" disabled>Rename Files</button>
-              <button id="downloadButton" class="button success wide" type="button" disabled>Download ZIP</button>
-            </div>
-            <p id="zipInfo" class="zip-info muted">ZIP will be available after processing.</p>
-          </section>
-
-          <section class="panel log-panel">
-            <div class="section-heading">
-              <div>
-                <p class="eyebrow">Log</p>
-                <h2>Activity and Errors</h2>
-              </div>
-              <button id="clearLogButton" class="button compact" type="button">Clear</button>
-            </div>
-            <div id="messageLog" class="message-log" aria-live="polite"></div>
-          </section>
-        </aside>
-
-        <section class="main-column">
-          <section class="panel preview-panel">
+        <section class="panel preview-panel">
             <div class="section-heading">
               <div>
                 <p class="eyebrow">Step 2</p>
-                <h2>Review Planned Renames</h2>
+                <h2>Review Backups</h2>
               </div>
             </div>
-            <div class="table-wrap">
+            <div class="review-control-layout">
+              <div class="review-toolbar" aria-label="Review controls">
+                <label class="search-field">
+                  <span>Search files</span>
+                  <input id="reviewSearch" type="search" placeholder="Search name, folder, or reason" autocomplete="off">
+                </label>
+                <label class="select-field">
+                  <span>Sort by</span>
+                  <select id="reviewSort">
+                    <option value="group">Duplicate group</option>
+                    <option value="size">Size</option>
+                    <option value="date">Date</option>
+                    <option value="name">Name</option>
+                  </select>
+                </label>
+                <label class="select-field">
+                  <span>Duplicate type</span>
+                  <select id="reviewTypeFilter">
+                    <option value="all">All types</option>
+                  </select>
+                </label>
+                <label class="select-field">
+                  <span>File type</span>
+                  <select id="reviewFileTypeFilter">
+                    <option value="all">All file types</option>
+                  </select>
+                </label>
+                <label class="select-field">
+                  <span>Folder path</span>
+                  <select id="reviewFolderFilter">
+                    <option value="all">All folders</option>
+                  </select>
+                </label>
+              </div>
+              <div class="button-row split review-actions" aria-label="Selection controls">
+                <div class="review-action-group">
+                  <button id="selectFlaggedButton" class="button compact" type="button" disabled>Select All</button>
+                  <button id="deselectFlaggedButton" class="button compact" type="button" disabled>Deselect All</button>
+                </div>
+                <div class="review-action-group">
+                  <button id="expandGroupsButton" class="button compact" type="button" disabled>Expand Groups</button>
+                  <button id="collapseGroupsButton" class="button compact" type="button" disabled>Collapse Groups</button>
+                </div>
+              </div>
+            </div>
+            <div id="tableWrap" class="table-wrap">
               <table>
                 <thead>
                   <tr>
-                    <th>Parent folder</th>
-                    <th>Secondary folder</th>
-                    <th>Original file name</th>
-                    <th>New file name</th>
+                    <th>Select</th>
+                    <th>Preview</th>
+                    <th>Label</th>
+                    <th>File name</th>
+                    <th>Folder path</th>
+                    <th>File size</th>
+                    <th>Modified</th>
+                    <th>Reason flagged</th>
                   </tr>
                 </thead>
                 <tbody id="previewBody">
                   <tr>
-                    <td colspan="4" class="empty-state">Load a folder to preview renames.</td>
+                    <td colspan="8" class="empty-state">Load a folder to review backed-up files.</td>
                   </tr>
                 </tbody>
               </table>
             </div>
-          </section>
-
-          <section class="panel progress-panel">
-            <div class="section-heading">
-              <div>
-                <p class="eyebrow">Progress</p>
-                <h2>Current Run</h2>
-              </div>
-              <div class="status-chip" id="statusText">Waiting for a folder.</div>
-            </div>
-
-            <div class="progress-stack">
-              <div class="status-line">
-                <span>Overall progress</span>
-                <span id="percentText">0%</span>
-              </div>
-              <div class="progress-track" aria-label="Progress">
-                <div id="progressBar" class="progress-bar"></div>
-              </div>
-              <div class="metrics">
-                <div><strong id="totalFiles">0</strong><span>Total files detected</span></div>
-                <div><strong id="completedFiles">0</strong><span>Files completed</span></div>
-                <div><strong id="remainingFiles">0</strong><span>Files remaining</span></div>
-                <div><strong id="elapsedTime">00:00</strong><span>Elapsed time</span></div>
-                <div><strong id="etaTime">--:--</strong><span>Estimated time remaining</span></div>
-                <div><strong id="filesPerSecond">0.0</strong><span>Files per second</span></div>
-                <div><strong id="heicSpeed">0.0</strong><span>HEIC conversions/sec</span></div>
-              </div>
-            </div>
-          </section>
         </section>
+
+        <section class="panel action-panel">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Step 3</p>
+              <h2>Actions &amp; Review Bin</h2>
+            </div>
+          </div>
+          <div class="recovery-summary" aria-live="polite">
+            <span>Storage recovered</span>
+            <strong id="recoveredStorage">0 B</strong>
+          </div>
+          <div class="primary-action-stack">
+            <div class="action-group">
+              <button id="permanentDeleteButton" class="button primary wide" type="button" disabled>Permanently Delete All</button>
+              <button id="restoreButton" class="button secondary wide" type="button" disabled>Recover All</button>
+            </div>
+            <div class="action-group">
+              <button id="groupBackupsButton" class="button secondary wide" type="button" disabled>Group Backups Into One Folder</button>
+              <button id="discardButton" class="button primary wide" type="button" disabled>Move to Review Bin</button>
+            </div>
+            <div class="action-group">
+              <button id="downloadExcelButton" class="button success wide" type="button" disabled>Download CSV Report</button>
+              <button id="downloadPdfButton" class="button secondary wide" type="button" disabled>Download PDF Report</button>
+            </div>
+          </div>
+          <p id="zipInfo" class="zip-info muted">Report will be available after files are moved to Review Bin.</p>
+          <div class="review-bin">
+            <div class="review-bin-heading">
+              <span>Review Bin</span>
+              <strong id="reviewBinCount">0 files</strong>
+            </div>
+            <div id="reviewBinList" class="review-bin-list muted">No files in Review Bin.</div>
+          </div>
+        </section>
+      </section>
+
+      <section class="panel progress-panel workflow-progress">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Progress</p>
+            <h2>Current Run</h2>
+          </div>
+          <div class="status-chip" id="statusText">Waiting for a folder.</div>
+        </div>
+
+        <div class="progress-stack">
+          <div class="status-line">
+            <span>Overall progress</span>
+            <span id="percentText">0%</span>
+          </div>
+          <div class="progress-track" aria-label="Progress">
+            <div id="progressBar" class="progress-bar"></div>
+          </div>
+          <div class="metrics">
+            <div><strong id="totalFiles">0</strong><span>Total files detected</span></div>
+            <div><strong id="completedFiles">0</strong><span>Files completed</span></div>
+            <div><strong id="remainingFiles">0</strong><span>Files remaining</span></div>
+            <div><strong id="elapsedTime">00:00</strong><span>Elapsed time</span></div>
+            <div><strong id="etaTime">--:--</strong><span>Estimated time remaining</span></div>
+            <div><strong id="filesPerSecond">0.0</strong><span>Files per second</span></div>
+            <div><strong id="flaggedStorage">0 B</strong><span>Storage flagged</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel log-panel workflow-log">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Log</p>
+            <h2>Activity and Errors</h2>
+          </div>
+          <button id="clearLogButton" class="button compact" type="button">Clear</button>
+        </div>
+        <div id="messageLog" class="message-log" aria-live="polite"></div>
       </section>
     </main>
 
+    <div id="confirmModal" class="modal-backdrop" hidden>
+      <section class="panel confirm-modal danger-confirm" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Confirm deletion</p>
+            <h2 id="confirmTitle">Move selected files?</h2>
+          </div>
+        </div>
+        <p id="confirmSummary" class="modal-copy muted">No files selected.</p>
+        <div class="button-row modal-actions">
+          <button id="cancelDeleteButton" class="button secondary" type="button">Cancel</button>
+          <button id="confirmDeleteButton" class="button primary" type="button">Move Files</button>
+        </div>
+      </section>
+    </div>
+    <div id="previewModal" class="modal-backdrop" hidden>
+      <section class="panel preview-modal" role="dialog" aria-modal="true" aria-labelledby="previewTitle">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">File preview</p>
+            <h2 id="previewTitle">Preview</h2>
+          </div>
+          <button id="closePreviewButton" class="button compact" type="button">Close</button>
+        </div>
+        <div id="previewContent" class="preview-content"></div>
+      </section>
+    </div>
     <script src="vendor/jszip.min.js"></script>
-    <script>
-      if (!window.JSZip) {
-        document.write('<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"><\/script>');
-      }
-    </script>
-    <script src="vendor/heic2any.min.js"></script>
-    <script>
-      if (!window.heic2any) {
-        document.write('<script src="https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js"><\/script>');
-      }
-    </script>
-    <script src="app.js"></script>
+    <script src="app.js?v=unrestricted-file-picker"></script>
   </body>
 </html>

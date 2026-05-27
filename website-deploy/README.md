@@ -1,12 +1,12 @@
-# SGA FILE RENAME
+# SGA File Nexus
 
-This is the website version of SGA FILE RENAME. It runs as a local browser website using plain HTML, CSS, and JavaScript.
+This is the website version of SGA File Nexus. It runs as a local browser website using plain HTML, CSS, and JavaScript.
 
 ## Run the Website
 
 Open `index.html` in a modern desktop browser.
 
-For the best folder picker and ZIP download behavior, run a small local website server from this folder:
+For the best folder picker, deletion permissions, and report downloads, run a small local website server from this folder:
 
 ```bash
 python3 -m http.server 8080
@@ -21,34 +21,25 @@ http://localhost:8080
 ## Website Flow
 
 1. Drop the main folder into the upload area, or use **Choose Main Folder**.
-2. Select the parent folders that should be processed.
-3. Review the planned renames in Step 2. The table is capped after 13 visible rows and scrolls for the rest.
-4. Click **Rename Files**.
-5. Click **Download ZIP**.
+2. Select the parent folders that should be scanned.
+3. Review backed-up files in Step 2. Use search, sorting, duplicate-type filters, and collapsible groups to focus large review lists.
+4. Select the flagged files you want to discard.
+5. Click **Move to Discarded**, confirm the action, then undo briefly or restore discarded files during the session.
+6. Download the deletion report.
 
-## Vendor Libraries
+## Browser Permissions
 
-The website expects these local files for full offline use:
-
-```text
-vendor/jszip.min.js
-vendor/heic2any.min.js
-```
-
-If those files are missing, `index.html` falls back to CDN copies:
-
-- JSZip: `https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js`
-- heic2any: `https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js`
+Deletion requires browser folder-handle permission. If files are added with drag-and-drop or a fallback file picker, the website can still scan and report, but the browser may block direct deletion and mark those files as skipped in the report.
 
 ## Folder Rules
 
-Expected structure:
+Recommended structure:
 
 ```text
 Main Folder/
   Parent Folder A/
     Kitchen/
-      IMG_0012.heic
+      IMG_0012.jpg
       IMG_0013.jpg
     Living Room/
       IMG_0014.png
@@ -57,28 +48,39 @@ Main Folder/
       IMG_0015.jpg
 ```
 
-The website does not rename:
+The website does not alter:
 
 - the main folder
 - parent folders
 - secondary parent folders
 
-Only supported files inside secondary parent folders of selected parent folders are renamed.
+Files at the project root, one folder deep, or inside secondary folders are scanned. System files such as `.DS_Store`, `Thumbs.db`, `desktop.ini`, and `._` files are skipped.
 
-## Renaming Rule
+Supported project formats include images (`.jpg`, `.jpeg`, `.png`, `.heic`, `.tif`, `.tiff`, `.webp`), documents (`.pdf`, `.doc`, `.docx`, `.xls`, `.xlsx`), CAD/design files (`.3dm`, `.dwg`, `.dxf`, `.skp`, `.rvt`, `.obj`, `.fbx`), and videos (`.mov`, `.mp4`). Other file types are still scanned and can appear in duplicate or backed-up review results.
 
-Files are renamed to:
+## Backed-Up File Rules
+
+Files are flagged when their names include backup or duplicate signals such as:
 
 ```text
-SecondaryParentFolderName_001.ext
-SecondaryParentFolderName_002.ext
-SecondaryParentFolderName_003.ext
+copy
+backup
+back up
+duplicate
+old
+final copy
+revised copy
+filename - copy
+filename_copy
+filename_backup
+filename_old
+(1), (2), (3)
 ```
 
-Supported file types are common image files plus `.mov` and `.pdf`. HEIC and HEIF files in selected folders are converted to JPEG and use `.jpg`.
+The scanner also compares file sizes, modified dates, exact filenames across folders, and files with the same base name and extension within related folders. Similar files are grouped together in the review list, and the newest version is recommended to keep unless you choose otherwise.
 
-Unsupported files are copied unchanged so the folder structure remains intact. Hidden/system files such as `.DS_Store`, `Thumbs.db`, and `desktop.ini` are skipped.
+## Safety
 
-## Large Folder Note
+Files are never deleted automatically or permanently. The app shows a confirmation modal with the selected file count and total storage size, then moves selected files into a temporary Discarded state. You can undo the latest discard briefly or restore all discarded files during the session. Folders are never deleted.
 
-The website builds the ZIP in the browser. Very large folders can hit browser memory or download limits. A server-side version is better for very large folders.
+After files are discarded, the app creates a downloadable CSV report with the scan date/time, parent folders scanned, files flagged, files moved to discarded, files still active, and errors encountered.
