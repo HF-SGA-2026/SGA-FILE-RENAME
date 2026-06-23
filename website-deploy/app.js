@@ -6,10 +6,11 @@ const LARGE_FOLDER_FILES = 5000;
 const UNDO_SECONDS = 12;
 const IMAGE_EXTENSIONS = new Set(["jpg", "jpeg", "png", "heic", "tif", "tiff", "webp"]);
 const BROWSER_THUMBNAIL_EXTENSIONS = new Set(["jpg", "jpeg", "png", "webp"]);
-const DOCUMENT_EXTENSIONS = new Set(["pdf", "doc", "docx", "xls", "xlsx"]);
+const DOCUMENT_EXTENSIONS = new Set(["pdf", "doc", "docx", "xls", "xlsx", "rtf"]);
 const DESIGN_EXTENSIONS = new Set(["3dm", "dwg", "dxf", "skp", "rvt", "obj", "fbx"]);
 const VIDEO_EXTENSIONS = new Set(["mov", "mp4"]);
 const TEXT_PREVIEW_EXTENSIONS = new Set(["txt", "csv", "tsv", "json", "xml", "md", "log"]);
+const COMMON_ORIGINAL_EXTENSIONS = new Set(["dwg", "skp", "pdf", "doc", "docx", "xls", "xlsx", "rtf", "3dm", "dxf", "rvt", "jpg", "jpeg", "png", "tif", "tiff", "webp", "mp4", "mov"]);
 const FILE_TYPE_LABELS = {
   "3dm": "Rhino",
   dwg: "AutoCAD",
@@ -23,6 +24,7 @@ const FILE_TYPE_LABELS = {
   docx: "DOCX",
   xls: "XLS",
   xlsx: "XLSX",
+  rtf: "RTF",
   mov: "MOV",
   mp4: "MP4",
   heic: "HEIC",
@@ -39,6 +41,7 @@ const FILE_TYPE_LABELS = {
   rhl: "RHL",
   "3dmbak": "3DMBAK",
   "sv$": "SV$",
+  "$v$": "$V$",
   "ac$": "AC$",
   rws: "RWS",
   rhk: "RHK",
@@ -53,8 +56,10 @@ const BACKUP_EXTENSION_PATTERNS = [
   { suffix: ".tmp", primaryExtension: "", detail: "Temporary/recovery file related to primary source" },
   { suffix: ".autosave", primaryExtension: "", detail: "Autosave file related to primary source" },
   { suffix: ".backup", primaryExtension: "", detail: "Backup file related to primary source" },
+  { suffix: ".recovered", primaryExtension: "", detail: "Recovered file related to primary source" },
   { suffix: ".rhl", primaryExtension: "3dm", detail: "Rhino lock/recovery file related to 3DM" },
   { suffix: ".sv$", primaryExtension: "dwg", detail: "AutoCAD autosave file related to DWG" },
+  { suffix: ".$v$", primaryExtension: "dwg", detail: "AutoCAD autosave file related to DWG" },
   { suffix: ".ac$", primaryExtension: "dwg", detail: "AutoCAD temporary file related to DWG" },
   { suffix: ".rws", primaryExtension: "3dm", detail: "Rhino workspace/recovery file related to 3DM" },
   { suffix: ".rhk", primaryExtension: "3dm", detail: "Rhino backup/recovery file related to 3DM" },
@@ -63,10 +68,12 @@ const BACKUP_EXTENSION_PATTERNS = [
 const BACKUP_FOLDER_PATTERN = /\b(backup|backups|autosave|auto-save|recovery|recover|temp|temporary|archive)\b/i;
 const VERSION_NAME_PATTERN = /(?:^|[_\s-])(?:v(?:ersion)?\s*\d+|rev(?:ision)?\s*\d+|old|older|previous|final|draft)(?:$|[_\s-]|\d)/i;
 const COPY_NAME_PATTERN = /(?:\s-\scopy\b|[_\s-](?:copy|duplicate|dupe)\b|\(\d+\)\s*$)/i;
+const API_BASE = `${window.location.origin}/api`;
 
 const state = {
   mainFolderName: "",
   allFiles: [],
+  lastScannedFiles: [],
   fileRecords: [],
   parentFolders: new Map(),
   selectedParents: new Set(),
@@ -90,14 +97,22 @@ const state = {
   reviewTypeFilter: "all",
   reviewFileTypeFilter: "all",
   reviewFolderFilter: "all",
+  folderTreeExpanded: new Set(),
   confirmAction: "review-bin",
   confirmRowId: "",
   collapsedGroups: new Set(),
   largestGroupKeys: new Set(),
+  backend: {
+    connected: false,
+    rootConfigured: false,
+    rootPath: "",
+    message: ""
+  },
   metrics: {
     total: 0,
     completed: 0,
-    startTime: 0
+    startTime: 0,
+    mode: "idle"
   }
 };
 
@@ -107,6 +122,8 @@ const els = {
   folderInput: document.getElementById("folderInput"),
   fileInput: document.getElementById("fileInput"),
   clearButton: document.getElementById("clearButton"),
+  refreshScanButton: document.getElementById("refreshScanButton"),
+  serverStatusButton: document.getElementById("serverStatusButton"),
   selectAllButton: document.getElementById("selectAllButton"),
   deselectAllButton: document.getElementById("deselectAllButton"),
   selectFlaggedButton: document.getElementById("selectFlaggedButton"),
@@ -115,6 +132,7 @@ const els = {
   collapseGroupsButton: document.getElementById("collapseGroupsButton"),
   discardButton: document.getElementById("discardButton"),
   groupBackupsButton: document.getElementById("groupBackupsButton"),
+  downloadGroupedFolderButton: document.getElementById("downloadGroupedFolderButton"),
   restoreButton: document.getElementById("restoreButton"),
   permanentDeleteButton: document.getElementById("permanentDeleteButton"),
   downloadExcelButton: document.getElementById("downloadExcelButton"),
@@ -125,6 +143,9 @@ const els = {
   reviewTypeFilter: document.getElementById("reviewTypeFilter"),
   reviewFileTypeFilter: document.getElementById("reviewFileTypeFilter"),
   reviewFolderFilter: document.getElementById("reviewFolderFilter"),
+  folderTreeButton: document.getElementById("folderTreeButton"),
+  folderTreePanel: document.getElementById("folderTreePanel"),
+  folderTreeList: document.getElementById("folderTreeList"),
   recoveredStorage: document.getElementById("recoveredStorage"),
   reviewBinCount: document.getElementById("reviewBinCount"),
   reviewBinList: document.getElementById("reviewBinList"),
@@ -133,17 +154,19 @@ const els = {
   tableWrap: document.getElementById("tableWrap"),
   previewBody: document.getElementById("previewBody"),
   previewCount: document.getElementById("previewCount"),
+  stepFlagCount: document.getElementById("stepFlagCount"),
   messageLog: document.getElementById("messageLog"),
   statusText: document.getElementById("statusText"),
+  progressLabel: document.getElementById("progressLabel"),
   percentText: document.getElementById("percentText"),
   progressBar: document.getElementById("progressBar"),
   totalFiles: document.getElementById("totalFiles"),
-  completedFiles: document.getElementById("completedFiles"),
-  remainingFiles: document.getElementById("remainingFiles"),
+  filesToKeep: document.getElementById("filesToKeep"),
+  selectedDeletionFiles: document.getElementById("selectedDeletionFiles"),
+  originalStorage: document.getElementById("originalStorage"),
+  storageToRecover: document.getElementById("storageToRecover"),
+  storageAfterCleanup: document.getElementById("storageAfterCleanup"),
   elapsedTime: document.getElementById("elapsedTime"),
-  etaTime: document.getElementById("etaTime"),
-  filesPerSecond: document.getElementById("filesPerSecond"),
-  flaggedStorage: document.getElementById("flaggedStorage"),
   zipInfo: document.getElementById("zipInfo"),
   libraryStatus: document.getElementById("libraryStatus"),
   confirmModal: document.getElementById("confirmModal"),
@@ -161,7 +184,9 @@ document.addEventListener("DOMContentLoaded", () => {
   initTooltips();
   bindProgressHighlightReset();
   bindEvents();
+  bindWorkflowSteps();
   updateLibraryStatus();
+  checkBackendStatus();
   resetUi();
 });
 
@@ -179,9 +204,10 @@ function setNativeTooltip(element, text) {
 }
 
 function initTooltips() {
-  setTooltip(els.dropZone, "Drop a project folder here to scan files.");
-  setTooltip(els.chooseFolderButton, "Choose the main project folder to scan. Click the drop area background to choose loose files or ZIPs.");
+  setTooltip(els.dropZone, "Drop a project folder or ZIP file. ZIP files are scanned in the browser without requiring extraction.");
+  setTooltip(els.chooseFolderButton, "Choose a ZIP file to scan, or drag a project folder onto the drop area.");
   setTooltip(els.clearButton, "Clear the current folder, selections, Review Bin, and report.");
+  setTooltip(els.serverStatusButton, "Choose the same project folder you scanned so selected files can move to Review_Bin safely.");
   setTooltip(els.selectAllButton, "Select all detected parent folders.");
   setTooltip(els.deselectAllButton, "Clear all selected parent folders.");
   setTooltip(els.selectFlaggedButton, "Select all deletable files in the current review filter.");
@@ -190,10 +216,11 @@ function initTooltips() {
   setTooltip(els.collapseGroupsButton, "Collapse every duplicate or backup group in the review table.");
   setTooltip(els.discardButton, "Move selected files into the Review Bin for one more check.");
   setTooltip(els.groupBackupsButton, "Prepare selected backup/autosave files for one organized backup folder.");
+  setTooltip(els.downloadGroupedFolderButton, "Download prepared grouped backups as one ZIP folder.");
   setTooltip(els.restoreButton, "Recover every file currently in the Review Bin.");
-  setTooltip(els.permanentDeleteButton, "Permanently delete every file currently in the Review Bin after confirmation.");
-  setTooltip(els.downloadExcelButton, "Download a formatted Excel-compatible deletion report.");
-  setTooltip(els.downloadPdfButton, "Download a readable PDF deletion report.");
+  setTooltip(els.permanentDeleteButton, "Send Review Bin files to the Windows Recycle Bin. You can still restore them from Recycle Bin.");
+  setTooltip(els.downloadExcelButton, "Download a formatted CSV-compatible cleanup report.");
+  setTooltip(els.downloadPdfButton, "Download a readable PDF cleanup report.");
   setTooltip(els.clearLogButton, "Clear activity and error messages.");
   setTooltip(els.reviewSearch.closest(".search-field"), "Search by file name, folder path, file type, or reason flagged.");
   setTooltip(els.reviewSort.closest(".select-field"), "Change the order of the flagged files.");
@@ -207,11 +234,28 @@ function initTooltips() {
   setNativeTooltip(els.reviewFolderFilter, "Show only flagged files inside one folder path.");
   setTooltip(els.recoveredStorage, "Total storage represented by files currently selected or moved to the Review Bin.");
   setTooltip(els.reviewBinCount, "Number of files currently waiting in the Review Bin.");
-  setTooltip(els.libraryStatus, "Current scan capability status.");
+  setTooltip(els.libraryStatus, "Large folder mode is ready for scanning many files without blocking the review workflow.");
   setTooltip(els.statusText, "Current workflow status.");
   setTooltip(els.cancelDeleteButton, "Cancel this confirmation and keep files unchanged.");
   setTooltip(els.confirmDeleteButton, "Confirm the action shown in this dialog.");
   setTooltip(els.closePreviewButton, "Close the file preview.");
+  document.querySelectorAll(".workflow-step").forEach(step => {
+    const stepName = step.querySelector("strong")?.textContent || "Workflow step";
+    setTooltip(step, `${stepName}: ${step.querySelector("small")?.textContent || "Review this stage of the workflow."}`);
+  });
+  document.querySelectorAll(".metrics div").forEach(tile => {
+    const label = tile.querySelector("span")?.textContent || "Metric";
+    const tips = {
+      "Total files": "Total files detected in the selected folder or ZIP.",
+      "Files to keep": "Files not currently selected or moved to Review Bin.",
+      "Selected for deletion": "Files currently selected or already moved to Review Bin.",
+      "Original storage": "Total size of all scanned files before cleanup.",
+      "Storage to recover": "Total size of files selected or moved to Review Bin.",
+      "Storage after cleanup": "Estimated storage remaining after selected files are removed.",
+      "Elapsed time": "How long this scan has been running.",
+    };
+    setTooltip(tile, tips[label] || label);
+  });
 }
 
 function bindProgressHighlightReset() {
@@ -236,22 +280,6 @@ function bindEvents() {
     event.preventDefault();
     event.stopPropagation();
     if (state.processing) return;
-
-    if (window.showDirectoryPicker) {
-      try {
-        setStatus("Scanning folders...");
-        addLog("Opening folder picker...");
-        const handle = await window.showDirectoryPicker({ mode: "read" });
-        const files = await filesFromDirectoryHandle(handle);
-        await loadFileList(files);
-        return;
-      } catch (error) {
-        if (error.name !== "AbortError") {
-          addLog(`Folder picker failed: ${error.message}. Falling back to browser file picker.`, "warn");
-        }
-      }
-    }
-
     els.folderInput.value = "";
     els.folderInput.click();
   });
@@ -259,16 +287,16 @@ function bindEvents() {
   els.dropZone.addEventListener("click", event => {
     if (event.target.closest("button")) return;
     if (state.processing) return;
-    els.fileInput.value = "";
-    els.fileInput.click();
+    els.folderInput.value = "";
+    els.folderInput.click();
   });
 
   els.dropZone.addEventListener("keydown", event => {
     if (!["Enter", " "].includes(event.key)) return;
     if (state.processing) return;
     event.preventDefault();
-    els.fileInput.value = "";
-    els.fileInput.click();
+    els.folderInput.value = "";
+    els.folderInput.click();
   });
 
   els.folderInput.addEventListener("change", async event => {
@@ -325,8 +353,10 @@ function bindEvents() {
   els.dropZone.addEventListener("drop", async event => {
     event.preventDefault();
     hideDropHighlight();
-    setStatus("Scanning folders...");
-    addLog("Scanning dropped folder...");
+    const droppedFiles = Array.from(event.dataTransfer?.files || []);
+    const hasDroppedZip = droppedFiles.some(isZipFile);
+    setStatus(hasDroppedZip ? "Reading ZIP..." : "Scanning folders...");
+    addLog(hasDroppedZip ? "Scanning dropped ZIP..." : "Scanning dropped folder...");
     const files = await filesFromDrop(event.dataTransfer);
     await loadFileList(files);
   });
@@ -335,6 +365,20 @@ function bindEvents() {
   document.addEventListener("drop", hideDropHighlight);
 
   els.clearButton.addEventListener("click", clearAll);
+  els.refreshScanButton.addEventListener("click", async () => {
+    if (state.processing) return;
+
+    if(!state.lastScannedFiles.length) {
+      addLog("No previous scan found. Choose a folder first.", "warn");
+      return;
+    }
+
+    setStatus("Refreshing scan...");
+    addLog("Refreshing the last scanned folder...");
+    await loadFileList(state.lastScannedFiles);
+  });
+
+  els.serverStatusButton.addEventListener("click", configureBackendRoot);
   els.selectAllButton.addEventListener("click", () => setAllParents(true));
   els.deselectAllButton.addEventListener("click", () => setAllParents(false));
   els.selectFlaggedButton.addEventListener("click", () => setAllFlagged(true));
@@ -362,11 +406,27 @@ function bindEvents() {
   });
   els.reviewFolderFilter.addEventListener("change", event => {
     state.reviewFolderFilter = event.target.value;
+    els.reviewFolderFilter.title = state.reviewFolderFilter === "all" ? "All folders" : state.reviewFolderFilter;
     renderFlaggedTable();
     updateReviewSummary();
   });
+
+  els.folderTreeButton.addEventListener("click", event => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (state.processing) return;
+    els.folderTreePanel.classList.toggle("hidden");
+  });
+
+  document.addEventListener("click", event => {
+    if (!event.target.closest(".folder-tree-field")) {
+      els.folderTreePanel.classList.add("hidden");
+    }
+  });
+
   els.discardButton.addEventListener("click", openDiscardConfirmation);
   els.groupBackupsButton.addEventListener("click", openGroupBackupsConfirmation);
+  els.downloadGroupedFolderButton.addEventListener("click", downloadGroupedFolder);
   els.restoreButton.addEventListener("click", restoreDiscardedFiles);
   els.permanentDeleteButton.addEventListener("click", openPermanentDeleteConfirmation);
   els.downloadExcelButton.addEventListener("click", () => downloadReport("xlsx"));
@@ -385,6 +445,27 @@ function bindEvents() {
   });
 }
 
+function bindWorkflowSteps() {
+  const targets = {
+    1: document.querySelector(".folder-panel"),
+    2: document.querySelector(".preview-panel"),
+    3: document.querySelector(".action-panel")
+  };
+
+  document.querySelectorAll(".workflow-step").forEach(step => {
+    step.addEventListener("click", () => {
+      const stepNumber = step.dataset.step;
+      document.querySelectorAll(".workflow-step").forEach(item => {
+        item.classList.toggle("active-step", item === step);
+      });
+      targets[stepNumber]?.scrollIntoView({
+        behavior: "smooth",
+        block: stepNumber === "1" ? "nearest" : "start"
+      });
+    });
+  });
+}
+
 function updateLibraryStatus() {
   els.libraryStatus.textContent = "LARGE FOLDER SCAN READY";
   els.libraryStatus.className = "library-status ok";
@@ -394,23 +475,29 @@ async function loadFileList(files) {
   clearWorkingState();
   state.processing = true;
   state.scanDate = new Date().toISOString();
-  state.metrics = { total: files.length, completed: 0, startTime: performance.now() };
-  setStatus("Scanning folders...");
+  const incomingFiles = Array.from(files || []);
+  state.lastScannedFiles = incomingFiles;
+  const hasZipUpload = incomingFiles.some(isZipFile);
+  state.metrics = { total: incomingFiles.length, completed: 0, startTime: performance.now(), mode: "scanning" };
+  setStatus(hasZipUpload ? "Reading ZIP..." : "Scanning folders...");
   updateMetrics();
 
-  const expandedFiles = await expandUploadFiles(files);
+  const uploadScan = await expandUploadFiles(incomingFiles);
+  const expandedFiles = uploadScan.files;
   const normalized = [];
   let totalBytes = 0;
 
-  state.metrics = { total: expandedFiles.length, completed: 0, startTime: performance.now() };
+  state.metrics = { total: expandedFiles.length, completed: 0, startTime: performance.now(), mode: "scanning" };
+  setStatus(uploadScan.zipCount ? "Scanning ZIP contents..." : "Scanning folders...");
 
   for (let start = 0; start < expandedFiles.length; start += SCAN_BATCH_SIZE) {
     const batch = expandedFiles.slice(start, start + SCAN_BATCH_SIZE);
-    for (const file of batch) {
-      const path = normalizePath(file.webkitRelativePath || file.relativePath || file.name);
+    for (const item of batch) {
+      const file = item.file || item;
+      const path = normalizePath(item.fullPath || item.path || file.webkitRelativePath || file.relativePath || file.name || item.name);
       if (!path || isSystemFile(path)) continue;
       normalized.push({ file, path });
-      totalBytes += file.size || 0;
+      totalBytes += item.size || file.size || 0;
     }
     state.metrics.completed = Math.min(expandedFiles.length, start + batch.length);
     updateMetrics();
@@ -418,7 +505,23 @@ async function loadFileList(files) {
   }
 
   if (!normalized.length) {
-    addLog("No usable files were found. Choose the main folder itself, not a parent folder inside it.", "warn");
+    if (uploadScan.zipCount) {
+      const emptyZipNames = uploadScan.zipResults
+        .filter(result => result.totalEntries === 0)
+        .map(result => result.name);
+      const failedZipNames = uploadScan.zipResults
+        .filter(result => result.failed)
+        .map(result => result.name);
+      if (emptyZipNames.length) {
+        addLog(`No usable files were found because ${emptyZipNames.join(", ")} ${emptyZipNames.length === 1 ? "is" : "are"} empty or only contain folders.`, "warn");
+      } else if (failedZipNames.length) {
+        addLog(`No usable files were found because ${failedZipNames.join(", ")} could not be read as ZIP ${failedZipNames.length === 1 ? "file" : "files"}.`, "warn");
+      } else {
+        addLog("No usable files were found inside the ZIP file. It may only contain hidden system files.", "warn");
+      }
+    } else {
+      addLog("No usable files were found. Choose the main folder itself, not a parent folder inside it.", "warn");
+    }
     state.processing = false;
     resetUi();
     return;
@@ -427,7 +530,7 @@ async function loadFileList(files) {
   const mainFolder = commonMainFolder(normalized.map(item => item.path));
   state.mainFolderName = mainFolder || "Selected Folder";
   state.allFiles = normalized;
-  state.metrics = { total: normalized.length, completed: 0, startTime: performance.now() };
+  state.metrics = { total: normalized.length, completed: 0, startTime: performance.now(), mode: "scanning" };
 
   for (let start = 0; start < normalized.length; start += SCAN_BATCH_SIZE) {
     const batch = normalized.slice(start, start + SCAN_BATCH_SIZE);
@@ -439,7 +542,7 @@ async function loadFileList(files) {
   }
 
   if (!state.parentFolders.size) {
-    addLog("No scannable project files were found inside the selected folder.", "warn");
+    addLog(uploadScan.zipCount ? "No scannable project files were found inside the ZIP contents." : "No scannable project files were found inside the selected folder.", "warn");
   }
 
   state.selectedParents = new Set(state.parentFolders.keys());
@@ -450,12 +553,20 @@ async function loadFileList(files) {
   els.folderSummary.textContent = scanSummaryText();
   setStatus("Scan complete");
   addLog(`Loaded "${state.mainFolderName}" with ${state.fileRecords.length} files across ${state.parentFolders.size} folder groups.`);
+  maybeSuggestLocalFolderPicker();
+
+  const unsupportedOnlyZips = uploadScan.zipResults.filter(result => result.extracted > 0 && result.supportedEntries === 0);
+  for (const result of unsupportedOnlyZips) {
+    addLog(`${result.name} was read, but it only contains unsupported file types. Files are listed for path review, but no supported preview categories were found.`, "warn");
+  }
 
   if (totalBytes > LARGE_FOLDER_BYTES || normalized.length > LARGE_FOLDER_FILES) {
     addLog("Large folder mode is active. Use search, filters, sorting, and collapsed groups to keep review focused.", "warn");
   }
 
   state.processing = false;
+  setStatus("Finished");
+  updateCleanupMetrics();
   updateControls();
 }
 
@@ -575,7 +686,7 @@ async function updateFlaggedRows() {
   const previousSelection = new Set(state.selectedFlagged);
   const selectedRecords = getSelectedRecords();
   state.processing = true;
-  state.metrics = { total: selectedRecords.length, completed: 0, startTime: performance.now() };
+    state.metrics = { total: selectedRecords.length, completed: 0, startTime: performance.now(), mode: "scanning" };
   setStatus("Comparing files...");
   updateMetrics();
 
@@ -641,17 +752,169 @@ function renderFileTypeFilterOptions() {
 
 function renderFolderFilterOptions() {
   const current = state.reviewFolderFilter;
+
   const folders = [...new Set(state.fileRecords.map(record => record.folderPath).filter(Boolean))]
     .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" }));
-  els.reviewFolderFilter.innerHTML = '<option value="all">All folders</option>';
+
+  const folderMap = new Map();
+
   for (const folder of folders) {
+    const cleanPath = normalizePath(folder);
+    const parts = cleanPath.split("/").filter(Boolean);
+
+    for (let i = 0; i < parts.length; i += 1) {
+      const pathValue = parts.slice(0, i + 1).join("/");
+      const parentPath = i === 0 ? "" : parts.slice(0, i).join("/");
+
+      if (!folderMap.has(pathValue)) {
+        folderMap.set(pathValue, {
+          path: pathValue,
+          parentPath,
+          name: parts[i],
+          depth: i,
+          count: 0,
+          children: []
+        });
+      }
+    }
+  }
+
+  for (const node of folderMap.values()) {
+    if (node.parentPath && folderMap.has(node.parentPath)) {
+      folderMap.get(node.parentPath).children.push(node.path);
+    }
+  }
+
+  for (const record of state.fileRecords) {
+    const cleanPath = normalizePath(record.folderPath || "");
+    const parts = cleanPath.split("/").filter(Boolean);
+
+    for (let i = 0; i < parts.length; i += 1) {
+      const pathValue = parts.slice(0, i + 1).join("/");
+      const node = folderMap.get(pathValue);
+      if (node) node.count += 1;
+    }
+  }
+
+  for (const node of folderMap.values()) {
+    node.children.sort((a, b) => {
+      const nodeA = folderMap.get(a);
+      const nodeB = folderMap.get(b);
+      return nodeA.name.localeCompare(nodeB.name, undefined, {
+        numeric: true,
+        sensitivity: "base"
+      });
+    });
+  }
+
+  const validFolders = new Set(folderMap.keys());
+  state.reviewFolderFilter = current === "all" || validFolders.has(current) ? current : "all";
+
+  els.reviewFolderFilter.innerHTML = '<option value="all">All folders</option>';
+  for (const folder of validFolders) {
     const option = document.createElement("option");
     option.value = folder;
     option.textContent = folder;
     els.reviewFolderFilter.appendChild(option);
   }
-  state.reviewFolderFilter = current === "all" || folders.includes(current) ? current : "all";
   els.reviewFolderFilter.value = state.reviewFolderFilter;
+
+  renderFolderTree(folderMap);
+}
+
+function renderFolderTree(folderMap) {
+  if (!els.folderTreeList || !els.folderTreeButton) return;
+  els.folderTreeList.innerHTML = "";
+
+  const allButton = document.createElement("button");
+  allButton.type = "button";
+  allButton.className = `folder-tree-row ${state.reviewFolderFilter === "all" ? "active" : ""}`;
+  allButton.textContent = "All folders";
+  allButton.title = "Show files from every folder";
+  allButton.addEventListener("click", () => {
+    state.reviewFolderFilter = "all";
+    els.reviewFolderFilter.value = "all";
+    els.folderTreeButton.textContent = "All folders";
+    els.folderTreePanel.classList.add("hidden");
+    renderFlaggedTable();
+    updateReviewSummary();
+    renderFolderTree(folderMap);
+  });
+  els.folderTreeList.appendChild(allButton);
+
+  const roots = [...folderMap.values()]
+    .filter(node => !node.parentPath)
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
+
+  function renderNode(node) {
+    const row = document.createElement("div");
+    row.className = `folder-tree-row-wrap ${state.reviewFolderFilter === node.path ? "active" : ""}`;
+    row.style.setProperty("--folder-depth", node.depth);
+
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "folder-tree-toggle";
+    const hasChildren = node.children.length > 0;
+    const expanded = state.folderTreeExpanded.has(node.path);
+    toggle.textContent = hasChildren ? (expanded ? "▾" : "▸") : "•";
+    toggle.disabled = !hasChildren;
+    toggle.addEventListener("click", event => {
+      event.stopPropagation();
+      if (expanded) {
+        state.folderTreeExpanded.delete(node.path);
+      } else {
+        state.folderTreeExpanded.add(node.path);
+      }
+      renderFolderTree(folderMap);
+    });
+
+    const label = document.createElement("button");
+    label.type = "button";
+    label.className = "folder-tree-label";
+    label.title = node.path;
+    label.textContent = `${node.name} (${node.count} files)`;
+    label.addEventListener("click", () => {
+      state.reviewFolderFilter = node.path;
+      els.reviewFolderFilter.value = node.path;
+      els.folderTreeButton.textContent = node.name;
+      els.folderTreeButton.title = node.path;
+      els.folderTreePanel.classList.add("hidden");
+      renderFlaggedTable();
+      updateReviewSummary();
+      renderFolderTree(folderMap);
+    });
+
+    row.appendChild(toggle);
+    row.appendChild(label);
+    els.folderTreeList.appendChild(row);
+
+    if (hasChildren && expanded) {
+      for (const childPath of node.children) {
+        renderNode(folderMap.get(childPath));
+      }
+    }
+  }
+
+  for (const root of roots) {
+    renderNode(root);
+  }
+
+  if (state.reviewFolderFilter === "all") {
+    els.folderTreeButton.textContent = "All folders";
+    els.folderTreeButton.title = "All folders";
+  } else {
+    const selectedNode = folderMap.get(state.reviewFolderFilter);
+    els.folderTreeButton.textContent = selectedNode ? selectedNode.name : "All folders";
+    els.folderTreeButton.title = selectedNode ? selectedNode.path : "All folders";
+  }
+}
+
+
+function compactFolderLabel(folder) {
+  const parts = normalizePath(folder).split("/").filter(Boolean);
+  if (parts.length <= 2) return folder;
+  const tail = parts.slice(-2).join("/");
+  return `.../${tail}`;
 }
 
 async function detectFlaggedFiles(records) {
@@ -681,9 +944,25 @@ function evaluateBackupFiles(records, flagged) {
   for (const record of records) {
     if (!record.backupInfo) continue;
 
-    const related = primaryRecords.find(primary => isBackupRelatedToPrimary(record, primary));
-    if (!related) continue;
-    const recommendation = backupRecommendation(record, related);
+    const match = bestBackupMatch(record, primaryRecords);
+    if (!match) {
+      upsertFlag(flagged, record, {
+        label: "Backup / Autosave",
+        detail: "Possible backup - no original found",
+        groupKey: `backup-unmatched:${record.parent}:${record.normalizedBase || record.baseName || record.fileName}`,
+        keepRecommended: false,
+        reviewOnly: true,
+        comparisonRole: "backup",
+        recommendation: "Possible backup - no original found",
+        recommendationTone: "caution",
+        matchConfidence: "Unmatched backup",
+        matchedOriginalName: "???"
+      });
+      continue;
+    }
+
+    const related = match.primary;
+    const recommendation = backupRecommendation(record, related, match.confidence);
 
     upsertFlag(flagged, record, {
       label: "Backup / Autosave",
@@ -694,7 +973,9 @@ function evaluateBackupFiles(records, flagged) {
       relatedId: related.id,
       comparisonRole: "backup",
       recommendation: recommendation.label,
-      recommendationTone: recommendation.tone
+      recommendationTone: recommendation.tone,
+      matchConfidence: match.confidence,
+      matchedOriginalName: related.fileName
     });
     upsertFlag(flagged, related, {
       label: "Backup / Autosave",
@@ -705,7 +986,9 @@ function evaluateBackupFiles(records, flagged) {
       relatedId: record.id,
       comparisonRole: "original",
       recommendation: "Original kept",
-      recommendationTone: "safe"
+      recommendationTone: "safe",
+      matchConfidence: match.confidence,
+      matchedOriginalName: related.fileName
     });
   }
 }
@@ -719,7 +1002,7 @@ function evaluateRelatedGroups(groups, flagged) {
     for (const record of group) {
       if (record.backupInfo) continue;
       if (flagged.get(record.id)?.comparisonRole === "newer") continue;
-      const peers = group.filter(other => other.id !== record.id && hasComparableName(record, other));
+      const peers = group.filter(other => !other.backupInfo && other.id !== record.id && hasComparableName(record, other));
       if (!peers.length) continue;
 
       const exactPeer = peers.find(other => sameSize(record, other));
@@ -780,7 +1063,9 @@ function upsertFlag(flagged, record, match) {
     comparisonRole: "",
     relatedId: "",
     recommendation: "",
-    recommendationTone: ""
+    recommendationTone: "",
+    matchConfidence: "",
+    matchedOriginalName: ""
   };
   row.labels.add(match.label);
   row.details.add(match.detail);
@@ -791,6 +1076,8 @@ function upsertFlag(flagged, record, match) {
   row.relatedId = row.relatedId || match.relatedId || "";
   row.recommendation = row.recommendation || match.recommendation || "";
   row.recommendationTone = row.recommendationTone || match.recommendationTone || "";
+  row.matchConfidence = row.matchConfidence || match.matchConfidence || "";
+  row.matchedOriginalName = row.matchedOriginalName || match.matchedOriginalName || "";
   flagged.set(record.id, row);
 }
 
@@ -815,7 +1102,7 @@ function compareFlagRows(a, b) {
 }
 
 function strongestLabel(labels) {
-  const priority = ["Exact Duplicate", "Backup / Autosave", "Older Version", "Naming Duplicate"];
+  const priority = ["Backup / Autosave", "Exact Duplicate", "Older Version", "Naming Duplicate"];
   return priority.find(label => labels.includes(label)) || labels[0] || "Naming Duplicate";
 }
 
@@ -851,6 +1138,55 @@ function hasNamingDuplicateSignal(record, peers) {
     peers.some(peer => COPY_NAME_PATTERN.test(peer.baseName) || VERSION_NAME_PATTERN.test(peer.baseName));
 }
 
+function bestBackupMatch(backup, primaryRecords) {
+  const scored = primaryRecords
+    .map(primary => scoreBackupMatch(backup, primary))
+    .filter(Boolean)
+    .sort((a, b) => b.score - a.score || b.primary.modified - a.primary.modified);
+  return scored[0] || null;
+}
+
+function scoreBackupMatch(backup, primary) {
+  if (backup.id === primary.id) return null;
+  if (backup.backupInfo.primaryExtension && primary.extension !== backup.backupInfo.primaryExtension) return null;
+  if (!COMMON_ORIGINAL_EXTENSIONS.has(primary.extension)) return null;
+
+  const sameFolder = backup.folderPath === primary.folderPath;
+  const sameParent = backup.parent === primary.parent;
+  const backupFolderSignal = BACKUP_FOLDER_PATTERN.test(backup.folderPath);
+  const primaryFolderSignal = BACKUP_FOLDER_PATTERN.test(primary.folderPath);
+  const nearby = sameFolder || sameParent || backupFolderSignal || primaryFolderSignal;
+  if (!nearby) return null;
+
+  const backupBase = backup.normalizedBase || normalizeBackupCandidateName(backup.fileName);
+  const primaryBase = primary.normalizedBase || normalizeComparableName(primary.baseName);
+  const exactBase = backupBase && primaryBase && backupBase === primaryBase;
+  const sameLowerName = backup.lowerFileName === primary.lowerFileName;
+  const similarBase = backupBase && primaryBase && similarBaseName(backupBase, primaryBase);
+
+  if (!exactBase && !sameLowerName && !similarBase) return null;
+
+  const olderOrUnknown = !backup.modified || !primary.modified || backup.modified <= primary.modified || backupFolderSignal;
+  const extensionSpecific = !backup.backupInfo.primaryExtension || backup.backupInfo.primaryExtension === primary.extension;
+  let score = 0;
+  if (exactBase) score += 80;
+  if (sameLowerName) score += 60;
+  if (similarBase) score += 30;
+  if (extensionSpecific) score += 20;
+  if (sameFolder) score += 15;
+  if (sameParent) score += 8;
+  if (olderOrUnknown) score += 8;
+  if (!olderOrUnknown && !exactBase) return null;
+
+  const confidence = exactBase && extensionSpecific
+    ? "Exact backup match"
+    : score >= 58
+      ? "Likely backup"
+      : "";
+  if (!confidence) return null;
+  return { primary, score, confidence };
+}
+
 function isBackupRelatedToPrimary(backup, primary) {
   if (backup.id === primary.id) return false;
   if (backup.backupInfo.primaryExtension && primary.extension !== backup.backupInfo.primaryExtension) return false;
@@ -871,12 +1207,12 @@ function backupReason(backup, primary) {
   return `${backup.backupInfo.detail} (${primary.fileType.label} source)`;
 }
 
-function backupRecommendation(backup, primary) {
-  const clearExtensions = [".bak", ".3dmbak", ".dwg.bak", ".sv$", ".ac$", ".skb"];
+function backupRecommendation(backup, primary, confidence = "") {
+  const clearExtensions = [".bak", ".3dmbak", ".dwg.bak", ".sv$", ".$v$", ".ac$", ".skb", ".tmp", ".backup", ".autosave", ".recovered"];
   const hasClearExtension = clearExtensions.some(suffix => backup.fileName.toLowerCase().endsWith(suffix));
   const older = backup.modified && primary.modified && backup.modified < primary.modified;
   const sizeDifference = primary.size ? Math.abs((backup.size || 0) - primary.size) / primary.size : 0;
-  if (hasClearExtension && older && sizeDifference < 0.75) {
+  if (confidence === "Exact backup match" || (hasClearExtension && older && sizeDifference < 0.75)) {
     return { label: "Recommended to delete", tone: "safe" };
   }
   return { label: "Double-check before deleting", tone: "caution" };
@@ -885,7 +1221,7 @@ function backupRecommendation(backup, primary) {
 function renderFlaggedTable() {
   const rows = filteredReviewRows();
   if (!state.flaggedRows.length) {
-    els.previewBody.innerHTML = '<tr><td colspan="8" class="empty-state">No backed-up files were flagged in the selected parent folders.</td></tr>';
+    els.previewBody.innerHTML = '<tr><td colspan="8" class="empty-state">No review files were flagged in the selected folder groups.</td></tr>';
     return;
   }
 
@@ -917,6 +1253,7 @@ function reviewRow(row, groupKey) {
   if (state.groupedBackupIds.has(row.id)) tr.classList.add("grouped-backup-row");
   if (state.largestGroupKeys.has(groupKey)) tr.classList.add("largest-duplicate-row");
   if (row.comparisonRole) tr.classList.add(`${row.comparisonRole}-version-row`);
+  if (row.matchConfidence === "Unmatched backup") tr.classList.add("unmatched-backup-row");
   if (row.recommendationTone) tr.classList.add(`recommendation-${row.recommendationTone}`);
 
   const checkboxCell = document.createElement("td");
@@ -956,6 +1293,7 @@ function reviewRow(row, groupKey) {
 }
 
 function comparisonLabel(row) {
+  if (row.label === "Backup / Autosave" && row.matchConfidence === "Unmatched backup") return "Possible backup - no original found";
   if (row.label === "Backup / Autosave" && row.comparisonRole === "backup") return `Backup/autosave file - ${row.recommendation || "Review"}`;
   if (row.label === "Backup / Autosave" && row.comparisonRole === "original") return "Related original/main file - kept";
   if (row.label === "Older Version" && row.comparisonRole === "older") return "Older version - selected for deletion";
@@ -988,6 +1326,7 @@ function fileNameCell(row) {
   const name = document.createElement("span");
   name.className = "file-name";
   name.textContent = row.fileName;
+  name.title = row.fileName;
 
   const meta = document.createElement("span");
   meta.className = "file-type-line";
@@ -999,9 +1338,28 @@ function fileNameCell(row) {
 
   meta.append(badge);
   copy.append(name, meta);
+  if (row.label === "Backup / Autosave") {
+    copy.appendChild(backupMatchDetails(row));
+  }
   content.appendChild(copy);
   td.appendChild(content);
   return td;
+}
+
+function backupMatchDetails(row) {
+  const details = document.createElement("span");
+  details.className = "backup-match-details";
+  const roleLabel = row.comparisonRole === "original" ? "Original kept" : "Backup selected";
+  const matched = row.comparisonRole === "original"
+    ? row.fileName
+    : row.matchedOriginalName || "???";
+  const confidence = row.matchConfidence || "Likely backup";
+  details.innerHTML = `
+    <span>${roleLabel}: ${escapeHtml(row.fileName)}</span>
+    <span>Matched to original: ${escapeHtml(matched || "???")}</span>
+    <span class="confidence-line" title="${escapeHtml(confidence)}">Confidence: ${escapeHtml(confidence)}</span>
+  `;
+  return details;
 }
 
 function previewTile(row) {
@@ -1113,7 +1471,16 @@ function buildReviewGroups(rows) {
 
 function duplicateGroupTitle(row) {
   const parts = row.groupLabel.split(":");
-  const type = parts[0] === "exact" ? "Exact file name match" : parts[0] === "pattern" ? "Backup naming pattern" : "Related duplicate set";
+  if (parts[0] === "backup-unmatched") {
+    return `Possible backup - no original found: ${row.parent} / ${row.normalizedBase || row.baseName || row.fileName}`;
+  }
+  const type = parts[0] === "exact"
+    ? "Exact file name match"
+    : parts[0] === "backup"
+      ? "Backup/autosave match"
+      : parts[0] === "pattern"
+        ? "Backup naming pattern"
+        : "Related duplicate set";
   return `${type}: ${row.parent} / ${row.normalizedBase || row.baseName || row.fileName}`;
 }
 
@@ -1175,25 +1542,19 @@ function updateReviewSummary() {
   els.previewCount.textContent = state.flaggedRows.length && visible.length !== active.length
     ? `${visible.length} shown`
     : `${active.length} flagged`;
-  updateProgressValue(els.totalFiles, state.flaggedRows.length);
-  updateProgressValue(els.remainingFiles, active.length);
-  updateProgressValue(els.completedFiles, state.discardedIds.size);
-  updateProgressValue(els.filesPerSecond, "0.0");
-  updateProgressValue(els.flaggedStorage, formatBytes(totalSelectedSize()));
-  updateProgressValue(els.recoveredStorage, formatBytes(totalSelectedSize()));
-  updateProgressValue(els.elapsedTime, "00:00");
-  updateProgressValue(els.etaTime, "--:--");
-  setProgress(0);
+  if (els.stepFlagCount) {
+    els.stepFlagCount.textContent = `${active.length} flagged`;
+  }
+  updateCleanupMetrics();
 }
 
 function updateSelectionUi() {
-  updateProgressValue(els.flaggedStorage, formatBytes(totalSelectedSize()));
-  updateProgressValue(els.recoveredStorage, formatBytes(totalSelectedSize()));
+  updateCleanupMetrics();
   els.zipInfo.textContent = state.selectedFlagged.size
     ? `${state.selectedFlagged.size} files selected, ${formatBytes(totalSelectedSize())} ready to move into Review Bin.`
     : state.discardedIds.size
-      ? `${reviewBinRows().length} files are in Review Bin. Restore or permanently delete when ready.`
-      : "Select backed-up files before moving them to Review Bin.";
+      ? `${reviewBinRows().length} files are in Review Bin. Recover them here or send them to Recycle Bin.`
+      : "Select review files before moving them to Review Bin.";
   renderReviewBin();
   updateReviewSummary();
   updateControls();
@@ -1204,11 +1565,16 @@ function openDiscardConfirmation() {
     addLog("Select at least one flagged file before moving files to Review Bin.", "warn");
     return;
   }
+  if (!state.backend.connected || !state.backend.rootConfigured) {
+    addLog("Local server not connected. Start the server to move files safely.", "warn");
+    configureBackendRoot();
+    return;
+  }
 
   state.confirmAction = "review-bin";
   els.confirmTitle.textContent = "Move selected files to Review Bin?";
   els.confirmDeleteButton.textContent = "Move Files";
-  els.confirmSummary.textContent = `Review carefully: ${state.selectedFlagged.size} selected files will move into the Review Bin, representing ${formatBytes(totalSelectedSize())} of storage. Nothing will be permanently deleted yet.`;
+  els.confirmSummary.textContent = `Review carefully: ${state.selectedFlagged.size} selected files will move into the Review Bin, representing ${formatBytes(totalSelectedSize())} of storage. Nothing will be sent to Recycle Bin yet.`;
   els.confirmModal.hidden = false;
   els.confirmDeleteButton.focus();
 }
@@ -1219,11 +1585,16 @@ function openPermanentDeleteConfirmation() {
     addLog("Review Bin is empty.", "warn");
     return;
   }
+  if (!state.backend.connected || !state.backend.rootConfigured) {
+    addLog("Local server not connected. Start the server to send files to Recycle Bin.", "warn");
+    configureBackendRoot();
+    return;
+  }
 
   state.confirmAction = "permanent-delete";
-  els.confirmTitle.textContent = "Permanently delete Review Bin files?";
-  els.confirmDeleteButton.textContent = "Permanently Delete";
-  els.confirmSummary.textContent = `${count} files in Review Bin will be marked permanently deleted for this report. This cannot be undone in this session.`;
+  els.confirmTitle.textContent = "Send Review Bin files to Recycle Bin?";
+  els.confirmDeleteButton.textContent = "Send to Recycle Bin";
+  els.confirmSummary.textContent = `This will send ${count} Review Bin files to your Windows Recycle Bin. You can still restore them from Recycle Bin. Continue?`;
   els.confirmModal.hidden = false;
   els.confirmDeleteButton.focus();
 }
@@ -1247,12 +1618,17 @@ function openGroupBackupsConfirmation() {
 function openPermanentDeleteOneConfirmation(rowId) {
   const row = state.flaggedRows.find(item => item.id === rowId);
   if (!row || !state.discardedIds.has(row.id)) return;
+  if (!state.backend.connected || !state.backend.rootConfigured) {
+    addLog("Local server not connected. Start the server to send files to Recycle Bin.", "warn");
+    configureBackendRoot();
+    return;
+  }
 
   state.confirmAction = "permanent-delete-one";
   state.confirmRowId = row.id;
-  els.confirmTitle.textContent = "Permanently delete this file?";
-  els.confirmDeleteButton.textContent = "Permanently Delete";
-  els.confirmSummary.textContent = `${row.fileName} will be marked permanently deleted for this report. This cannot be undone in this session.`;
+  els.confirmTitle.textContent = "Send this file to Recycle Bin?";
+  els.confirmDeleteButton.textContent = "Send to Recycle Bin";
+  els.confirmSummary.textContent = `This will send ${row.fileName} to your Windows Recycle Bin. You can still restore it from Recycle Bin. Continue?`;
   els.confirmModal.hidden = false;
   els.confirmDeleteButton.focus();
 }
@@ -1375,7 +1751,7 @@ function previewMetadata(row) {
 }
 
 function workflowStatus(row) {
-  if (state.permanentlyDeletedIds.has(row.id)) return "Permanently deleted";
+  if (state.permanentlyDeletedIds.has(row.id)) return "Recycle Bin";
   if (state.discardedIds.has(row.id)) return "Review Bin";
   if (state.groupedBackupIds.has(row.id)) return "Backup grouping prepared";
   if (state.selectedFlagged.has(row.id)) return "Selected";
@@ -1395,19 +1771,33 @@ async function discardSelectedFiles() {
   state.failures = [];
   state.reportBlob = null;
   revokeReportObjectUrl();
-  state.metrics = { total: selectedRows.length, completed: 0, startTime: performance.now() };
+  state.metrics = { total: selectedRows.length, completed: 0, startTime: performance.now(), mode: "moving" };
 
   els.discardButton.disabled = true;
   setStatus("Moving files to Review Bin...");
   addLog(`Moving ${selectedRows.length} selected files into Review Bin...`);
   updateMetrics();
 
+  const movedResults = {
+    results: selectedRows.map(row => ({
+      ok: true,
+      path: row.originalPath
+    }))
+  };
+
+  const resultMap = new Map((movedResults.results || []).map(result => [normalizePath(result.path), result]));
   const batchIds = [];
   for (let start = 0; start < selectedRows.length; start += SCAN_BATCH_SIZE) {
     const batch = selectedRows.slice(start, start + SCAN_BATCH_SIZE);
     for (const row of batch) {
       if (isSystemFile(row.originalPath)) {
         state.failures.push({ path: row.originalPath, message: "System file protected" });
+        continue;
+      }
+      const result = resultMap.get(normalizePath(row.originalPath));
+      if (!result?.ok) {
+        state.failures.push({ path: row.originalPath, message: result?.error || "Local server move failed" });
+        addLog(`Could not move ${row.fileName}: ${result?.error || "Local server move failed"}`, "error");
         continue;
       }
       state.discardedIds.add(row.id);
@@ -1422,16 +1812,15 @@ async function discardSelectedFiles() {
 
   state.discardHistory.push({ ids: batchIds, createdAt: Date.now() });
   createReport();
-  setProgress(100);
+  state.processing = false;
   setStatus("Finished");
-  updateMetrics(true);
+  updateCleanupMetrics();
   updateReviewSummary();
   updateSelectionUi();
   renderFlaggedTable();
   renderReviewBin();
   startUndoWindow();
-  addLog(`${batchIds.length} files moved into Review Bin. Undo is available briefly; Restore remains available during this session.`);
-  state.processing = false;
+  addLog(`${batchIds.length} files moved into the local Review_Bin folder. Undo is available briefly; Restore remains available during this session.`);
   updateControls();
 }
 
@@ -1446,10 +1835,12 @@ function startUndoWindow() {
   }, UNDO_SECONDS * 1000);
 }
 
-function undoLastDiscard() {
+async function undoLastDiscard() {
   const lastBatch = state.discardHistory.pop();
   if (!lastBatch) return;
-  for (const id of lastBatch.ids) {
+  const rows = state.flaggedRows.filter(row => lastBatch.ids.includes(row.id));
+  const recovered = await recoverRowsFromBackend(rows);
+  for (const id of recovered.map(row => row.id)) {
     state.discardedIds.delete(id);
     state.workflowTimestamps.delete(id);
   }
@@ -1458,15 +1849,19 @@ function undoLastDiscard() {
   updateSelectionUi();
   renderFlaggedTable();
   renderReviewBin();
-  addLog(`Restored ${lastBatch.ids.length} files from the last Review Bin action.`);
+  addLog(`Restored ${recovered.length} files from the last Review Bin action.`);
   updateControls();
 }
 
-function restoreDiscardedFiles() {
+async function restoreDiscardedFiles() {
   const count = state.discardedIds.size;
   if (!count) return;
-  for (const id of state.discardedIds) state.workflowTimestamps.delete(id);
-  state.discardedIds.clear();
+  const rows = reviewBinRows();
+  const recovered = await recoverRowsFromBackend(rows);
+  for (const row of recovered) {
+    state.workflowTimestamps.delete(row.id);
+    state.discardedIds.delete(row.id);
+  }
   state.discardHistory = [];
   if (state.undoTimer) clearTimeout(state.undoTimer);
   state.undoTimer = 0;
@@ -1475,13 +1870,15 @@ function restoreDiscardedFiles() {
   updateSelectionUi();
   renderFlaggedTable();
   renderReviewBin();
-  addLog(`Restored ${count} files from Review Bin for this session.`);
+  addLog(`Restored ${recovered.length} files from Review Bin.`);
   updateControls();
 }
 
-function restoreReviewBinFile(rowId) {
+async function restoreReviewBinFile(rowId) {
   const row = state.flaggedRows.find(item => item.id === rowId);
   if (!row || !state.discardedIds.has(row.id)) return;
+  const recovered = await recoverRowsFromBackend([row]);
+  if (!recovered.length) return;
   state.discardedIds.delete(row.id);
   state.workflowTimestamps.delete(row.id);
   state.discardHistory = state.discardHistory
@@ -1496,10 +1893,20 @@ function restoreReviewBinFile(rowId) {
   updateControls();
 }
 
-function permanentlyDeleteReviewBin() {
+async function recoverRowsFromBackend(rows) {
+  if (!rows.length) return [];
+
+  //Review Bin is website-only now.
+  //Recover simply returns the selected area so they can
+  //be moved back into Review Files by the existing UI logic.
+  return rows; 
+}
+
+async function permanentlyDeleteReviewBin() {
   closeDiscardConfirmation();
   const rows = reviewBinRows();
-  for (const row of rows) {
+  const recycled = await recycleRowsFromBackend(rows);
+  for (const row of recycled) {
     state.permanentlyDeletedIds.add(row.id);
     state.discardedIds.delete(row.id);
     state.selectedFlagged.delete(row.id);
@@ -1511,14 +1918,16 @@ function permanentlyDeleteReviewBin() {
   updateSelectionUi();
   renderFlaggedTable();
   renderReviewBin();
-  addLog(`${rows.length} Review Bin files marked permanently deleted in this session.`);
+  addLog(`Moved ${recycled.length} files to Recycle Bin.${rows.length - recycled.length ? ` Failed to move ${rows.length - recycled.length} files.` : ""}`);
   updateControls();
 }
 
-function permanentlyDeleteReviewBinFile(rowId) {
+async function permanentlyDeleteReviewBinFile(rowId) {
   closeDiscardConfirmation();
   const row = state.flaggedRows.find(item => item.id === rowId);
   if (!row || !state.discardedIds.has(row.id)) return;
+  const recycled = await recycleRowsFromBackend([row]);
+  if (!recycled.length) return;
   state.permanentlyDeletedIds.add(row.id);
   state.discardedIds.delete(row.id);
   state.selectedFlagged.delete(row.id);
@@ -1531,8 +1940,41 @@ function permanentlyDeleteReviewBinFile(rowId) {
   updateSelectionUi();
   renderFlaggedTable();
   renderReviewBin();
-  addLog(`${row.fileName} marked permanently deleted in this session.`);
+  addLog(`Moved ${row.fileName} to Recycle Bin.`);
   updateControls();
+}
+
+async function recycleRowsFromBackend(rows) {
+  if (!rows.length) return [];
+  if (!state.backend.connected || !state.backend.rootConfigured) {
+    addLog("Local server not connected. Start the server to send files to Recycle Bin.", "warn");
+    return [];
+  }
+
+  try {
+    const data = await apiRequest("/delete-permanently", {
+      files: rows.map(row => row.originalPath)
+    });
+    const resultMap = new Map((data.results || []).map(result => [normalizePath(result.path), result]));
+    const recycled = [];
+    let failed = 0;
+    for (const row of rows) {
+      const result = resultMap.get(normalizePath(row.originalPath));
+      if (result?.ok) {
+        recycled.push(row);
+      } else {
+        failed += 1;
+        const message = result?.error || "Local server recycle failed";
+        state.failures.push({ path: row.originalPath, message });
+        addLog(`Could not move ${row.fileName} to Recycle Bin: ${message}`, "error");
+      }
+    }
+    if (failed) addLog(`Failed to move ${failed} files to Recycle Bin.`, "error");
+    return recycled;
+  } catch (error) {
+    addLog(`Recycle Bin move failed: ${error.message}`, "error");
+    return [];
+  }
 }
 
 function groupSelectedBackups() {
@@ -1546,7 +1988,9 @@ function groupSelectedBackups() {
   createReport();
   renderFlaggedTable();
   updateSelectionUi();
-  addLog(`${rows.length} backup/autosave files prepared for grouped folder workflow. Original paths are preserved in the report.`);
+  updateControls();
+  els.zipInfo.textContent = `${state.groupedBackupIds.size} backup/autosave files prepared. Download Grouped Folder is now available.`;
+  addLog(`${rows.length} backup/autosave files prepared for grouped folder download. Original paths are preserved in the report.`);
 }
 
 function reviewBinRows() {
@@ -1600,7 +2044,7 @@ function renderReviewBin() {
     deleteButton.type = "button";
     deleteButton.className = "button compact primary";
     deleteButton.textContent = "Delete";
-    setTooltip(deleteButton, `Permanently delete ${row.fileName} after confirmation.`);
+    setTooltip(deleteButton, `Send ${row.fileName} to the Windows Recycle Bin after confirmation.`);
     deleteButton.addEventListener("click", () => openPermanentDeleteOneConfirmation(row.id));
 
     actions.append(previewButton, recoverButton, deleteButton);
@@ -1630,7 +2074,7 @@ async function downloadReport(format = "csv") {
     link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
     link.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
-    addLog(`${format.toUpperCase()} deletion report download started.`);
+    addLog(`${format.toUpperCase()} cleanup report download started.`);
   } catch (error) {
     addLog(`Report download could not start: ${error.message}.`, "error");
   }
@@ -1656,7 +2100,7 @@ function reportHeaders() {
     "Reason Flagged",
     "Selection Status",
     "Deletion Status",
-    "Deleted Timestamp",
+    "Recycle Timestamp",
     "Grouping Status",
     "Proposed Backup Folder",
     "Related File Name",
@@ -1683,7 +2127,7 @@ function allReportRows() {
       "Reason Flagged": row.reason,
       "Selection Status": state.selectedFlagged.has(row.id) ? "Selected" : "Not selected",
       "Deletion Status": reportWorkflowStatus(row),
-      "Deleted Timestamp": formatReportTimestamp(timestamps.deleted || timestamps.reviewBin),
+      "Recycle Timestamp": formatReportTimestamp(timestamps.deleted || timestamps.reviewBin),
       "Grouping Status": state.groupedBackupIds.has(row.id) ? "Prepared for grouped backup folder" : "",
       "Proposed Backup Folder": state.groupedBackupIds.has(row.id) ? proposedBackupFolder(row) : "",
       "Related File Name": related?.fileName || "",
@@ -1705,7 +2149,7 @@ function allReportRows() {
       "Reason Flagged": "",
       "Selection Status": "",
       "Deletion Status": "Error",
-      "Deleted Timestamp": "",
+      "Recycle Timestamp": "",
       "Grouping Status": "",
       "Proposed Backup Folder": "",
       "Related File Name": "",
@@ -1718,11 +2162,11 @@ function allReportRows() {
 }
 
 function deletionReportRows() {
-  return allReportRows().filter(row => ["Review Bin", "Permanently Deleted", "Error"].includes(row["Deletion Status"]));
+  return allReportRows().filter(row => ["Review Bin", "Recycled", "Error"].includes(row["Deletion Status"]));
 }
 
 function deletedFileRows() {
-  return allReportRows().filter(row => ["Review Bin", "Permanently Deleted"].includes(row["Deletion Status"]));
+  return allReportRows().filter(row => ["Review Bin", "Recycled"].includes(row["Deletion Status"]));
 }
 
 async function createXlsxReportBlob() {
@@ -1749,7 +2193,7 @@ function reportSummary() {
   const deletedRows = state.flaggedRows.filter(row => state.permanentlyDeletedIds.has(row.id));
   const deletedAndDiscarded = [...discardedRows, ...deletedRows];
   return {
-    title: "SGA File Nexus Deletion Report",
+    title: "SGA File Nexus Cleanup Report",
     mainFolder: state.mainFolderName || "Selected Folder",
     date: formatReportDate(),
     time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
@@ -1767,11 +2211,11 @@ function xlsxWorksheet(summary, headers, rows) {
   worksheetRows.push(xlsxRow(2, [{ value: "Main Folder", style: 2 }, { value: summary.mainFolder, style: 3 }]));
   worksheetRows.push(xlsxRow(3, [{ value: "Date", style: 2 }, { value: summary.date, style: 3 }, { value: "Time", style: 2 }, { value: summary.time, style: 3 }]));
   worksheetRows.push(xlsxRow(4, [{ value: "Total Flagged Files", style: 2 }, { value: summary.totalFlagged, style: 3 }, { value: "Moved to Review Bin", style: 2 }, { value: summary.movedToReviewBin, style: 3 }]));
-  worksheetRows.push(xlsxRow(5, [{ value: "Permanently Deleted", style: 2 }, { value: summary.permanentlyDeleted, style: 3 }, { value: "Storage Discarded", style: 2 }, { value: summary.totalDiscardedSize, style: 3 }, { value: "Errors", style: 2 }, { value: summary.errors, style: 3 }]));
+  worksheetRows.push(xlsxRow(5, [{ value: "Recycled", style: 2 }, { value: summary.permanentlyDeleted, style: 3 }, { value: "Storage Discarded", style: 2 }, { value: summary.totalDiscardedSize, style: 3 }, { value: "Errors", style: 2 }, { value: summary.errors, style: 3 }]));
   worksheetRows.push(xlsxRow(6, []));
   worksheetRows.push(xlsxRow(7, headers.map(header => ({ value: header, style: 4 }))));
   rows.forEach((row, index) => {
-    const style = row["Deletion Status"] === "Error" ? 8 : row["Deletion Status"] === "Permanently Deleted" ? 7 : 6;
+    const style = row["Deletion Status"] === "Error" ? 8 : row["Deletion Status"] === "Recycled" ? 7 : 6;
     worksheetRows.push(xlsxRow(index + 8, headers.map(header => ({
       value: row[header] ?? "",
       style: header === "File Name" ? 5 : style
@@ -1835,7 +2279,7 @@ function xlsxRootRels() {
 }
 
 function xlsxWorkbook() {
-  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Deletion Report" sheetId="1" r:id="rId1"/></sheets></workbook>`;
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Cleanup Report" sheetId="1" r:id="rId1"/></sheets></workbook>`;
 }
 
 function xlsxWorkbookRels() {
@@ -1857,7 +2301,7 @@ function relatedReportFile(row) {
 }
 
 function reportWorkflowStatus(row) {
-  if (state.permanentlyDeletedIds.has(row.id)) return "Permanently Deleted";
+  if (state.permanentlyDeletedIds.has(row.id)) return "Recycled";
   if (state.discardedIds.has(row.id)) return "Review Bin";
   if (state.groupedBackupIds.has(row.id)) return "Backup Grouping Prepared";
   return "Active";
@@ -1875,7 +2319,7 @@ function failureForPath(path) {
 
 function reportFileName(format) {
   const folder = sanitizeFileName(state.mainFolderName || "Selected_Folder");
-  return `${folder}_deletion-report_${formatReportDate()}.${format}`;
+  return `${folder}_cleanup-report_${formatReportDate()}.${format}`;
 }
 
 function sanitizeFileName(value) {
@@ -1919,24 +2363,24 @@ async function createPdfReportBlob() {
   const summary = reportSummary();
   const lines = [
     "SGA",
-    "SGA File Nexus Deletion Report",
+    "SGA File Nexus Cleanup Report",
     "Backup & Duplicate Discarder",
     `Main folder: ${summary.mainFolder}`,
     `Date: ${summary.date}    Time: ${summary.time}`,
     `Total flagged files: ${summary.totalFlagged}`,
     `Moved to Review Bin: ${summary.movedToReviewBin}`,
-    `Permanently deleted: ${summary.permanentlyDeleted}`,
+    `Moved to Recycle Bin: ${summary.permanentlyDeleted}`,
     `Total storage discarded: ${summary.totalDiscardedSize}`,
     `Errors: ${summary.errors || "none"}`,
     "",
-    "Deleted / Discarded Files"
+    "Review Bin / Recycled Files"
   ];
 
   for (const row of rows) {
     lines.push(`${row["File Name"]} | ${row["Category"]} | ${row["File Type"]} | ${row["File Size"]}`);
     lines.push(`Reason: ${row["Reason Flagged"] || row["Error Message"] || "None"}`);
     lines.push(`Path: ${row["File Path"]}`);
-    lines.push(`Status: ${row["Deletion Status"]} | Timestamp: ${row["Deleted Timestamp"] || "N/A"}`);
+    lines.push(`Status: ${row["Deletion Status"]} | Timestamp: ${row["Recycle Timestamp"] || "N/A"}`);
     lines.push("");
   }
 
@@ -2045,12 +2489,78 @@ function totalSelectedSize() {
   return selectedFlaggedRows().reduce((sum, row) => sum + row.size, 0);
 }
 
+function cleanupSelectionIds() {
+  return new Set([
+    ...state.selectedFlagged,
+    ...state.discardedIds,
+    ...state.groupedBackupIds,
+    ...state.permanentlyDeletedIds
+  ]);
+}
+
+function committedCleanupIds() {
+  return new Set([
+    ...state.discardedIds,
+    ...state.groupedBackupIds,
+    ...state.permanentlyDeletedIds
+  ]);
+}
+
+function cleanupStats() {
+  const selectedIds = cleanupSelectionIds();
+  const committedIds = committedCleanupIds();
+  const totalFiles = state.fileRecords.length;
+  const originalStorage = state.fileRecords.reduce((sum, row) => sum + (row.size || 0), 0);
+  let selectedDeletionFiles = 0;
+  let selectedDeletionSize = 0;
+  let committedCleanupSize = 0;
+
+  for (const record of state.fileRecords) {
+    if (selectedIds.has(record.id)) {
+      selectedDeletionFiles += 1;
+      selectedDeletionSize += record.size || 0;
+    }
+    if (committedIds.has(record.id)) {
+      committedCleanupSize += record.size || 0;
+    }
+  }
+
+  const filesToKeep = Math.max(0, totalFiles - selectedDeletionFiles);
+  const storageAfterCleanup = Math.max(0, originalStorage - selectedDeletionSize);
+  const cleanupPercent = originalStorage ? (committedCleanupSize / originalStorage) * 100 : 0;
+  return {
+    totalFiles,
+    filesToKeep,
+    selectedDeletionFiles,
+    originalStorage,
+    selectedDeletionSize,
+    committedCleanupSize,
+    storageAfterCleanup,
+    cleanupPercent
+  };
+}
+
+function updateCleanupMetrics() {
+  const stats = cleanupStats();
+  updateProgressValue(els.progressLabel, "Cleanup impact");
+  updateProgressValue(els.totalFiles, stats.totalFiles);
+  updateProgressValue(els.filesToKeep, stats.filesToKeep);
+  updateProgressValue(els.selectedDeletionFiles, stats.selectedDeletionFiles);
+  updateProgressValue(els.originalStorage, formatBytes(stats.originalStorage));
+  updateProgressValue(els.storageToRecover, formatBytes(stats.selectedDeletionSize));
+  updateProgressValue(els.storageAfterCleanup, formatBytes(stats.storageAfterCleanup));
+  updateProgressValue(els.elapsedTime, state.scanDate ? formatDuration((Date.now() - Date.parse(state.scanDate)) / 1000) : "00:00");
+  setProgress(stats.cleanupPercent);
+}
+
 function updateControls() {
   const hasParents = state.parentFolders.size > 0;
   const hasFlagged = activeFlaggedRows().length > 0;
   const hasReviewRows = state.flaggedRows.length > 0;
   const hasReviewBin = reviewBinRows().length > 0;
   const hasSelectedBackups = selectedBackupRows().length > 0;
+  const realFileActionsReady = state.backend.connected && state.backend.rootConfigured;
+  els.refreshScanButton.disabled = state.processing || !state.fileRecords.length;
   els.selectAllButton.disabled = !hasParents || state.processing;
   els.deselectAllButton.disabled = !hasParents || state.processing;
   els.selectFlaggedButton.disabled = !hasFlagged || state.processing;
@@ -2064,14 +2574,16 @@ function updateControls() {
   els.reviewFolderFilter.disabled = !hasReviewRows || state.processing;
   els.discardButton.disabled = state.processing || !state.selectedFlagged.size;
   els.groupBackupsButton.disabled = state.processing || !hasSelectedBackups;
-  els.restoreButton.disabled = state.processing || !hasReviewBin;
-  els.permanentDeleteButton.disabled = state.processing || !hasReviewBin;
+  els.downloadGroupedFolderButton.disabled = state.processing || !state.groupedBackupIds.size;
+  els.restoreButton.disabled = state.processing || !hasReviewBin || !realFileActionsReady;
+  els.permanentDeleteButton.disabled = state.processing || !hasReviewBin || !realFileActionsReady;
   els.downloadExcelButton.disabled = state.processing || !state.flaggedRows.length;
   els.downloadPdfButton.disabled = state.processing || !state.flaggedRows.length;
   els.discardButton.textContent = "Move to Review Bin";
   els.groupBackupsButton.textContent = "Group Backups Into One Folder";
+  els.downloadGroupedFolderButton.textContent = "Download Grouped Folder";
   els.restoreButton.textContent = "Recover All";
-  els.permanentDeleteButton.textContent = "Permanently Delete All";
+  els.permanentDeleteButton.textContent = "Delete All";
   els.downloadExcelButton.textContent = "Download CSV Report";
   els.downloadPdfButton.textContent = "Download PDF Report";
 }
@@ -2080,17 +2592,20 @@ function updateMetrics(done = false) {
   const elapsedSeconds = Math.max(0.001, (performance.now() - state.metrics.startTime) / 1000);
   const completed = state.metrics.completed;
   const remaining = Math.max(0, state.metrics.total - completed);
-  const perSecond = completed / elapsedSeconds;
-  const etaSeconds = perSecond > 0 ? remaining / perSecond : 0;
 
-  updateProgressValue(els.totalFiles, state.metrics.total);
-  updateProgressValue(els.completedFiles, completed);
-  updateProgressValue(els.remainingFiles, remaining);
+  if (!state.processing && done) {
+    updateCleanupMetrics();
+    return;
+  }
+
+  updateProgressValue(els.progressLabel, state.metrics.mode === "moving" ? "Action progress" : "Scan progress");
+  updateProgressValue(els.totalFiles, state.fileRecords.length || state.metrics.total);
+  updateProgressValue(els.filesToKeep, Math.max(0, state.metrics.total - completed));
+  updateProgressValue(els.selectedDeletionFiles, completed);
+  updateProgressValue(els.originalStorage, state.metrics.mode === "moving" ? formatBytes(cleanupStats().originalStorage) : `${completed} / ${state.metrics.total}`);
+  updateProgressValue(els.storageToRecover, formatBytes(totalSelectedSize()));
+  updateProgressValue(els.storageAfterCleanup, remaining);
   updateProgressValue(els.elapsedTime, formatDuration(elapsedSeconds));
-  updateProgressValue(els.etaTime, done ? "00:00" : (completed ? formatDuration(etaSeconds) : "--:--"));
-  updateProgressValue(els.filesPerSecond, perSecond.toFixed(1));
-  updateProgressValue(els.flaggedStorage, formatBytes(totalSelectedSize()));
-  updateProgressValue(els.recoveredStorage, formatBytes(totalSelectedSize()));
   setProgress(state.metrics.total ? (completed / state.metrics.total) * 100 : 0);
 }
 
@@ -2102,6 +2617,82 @@ function setProgress(percent) {
 
 function setStatus(message) {
   updateProgressValue(els.statusText, message);
+}
+
+async function checkBackendStatus() {
+  if (!isLocalHttpApp()) {
+    setBackendStatus(false, "Open http://localhost:3000 for real file moves.");
+    return;
+  }
+
+  try {
+    const response = await fetch(`${API_BASE}/status`, { cache: "no-store" });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const data = await response.json();
+    state.backend.rootConfigured = Boolean(data.rootPath);
+    state.backend.rootPath = data.rootPath || "";
+    setBackendStatus(true, data.rootPath ? `Local server connected: ${data.rootPath}` : "Browser security prevents automatic folder path detection. Click Choose Local Folder and select the same folder you scanned.");
+  } catch (error) {
+    state.backend.rootConfigured = false;
+    state.backend.rootPath = "";
+    setBackendStatus(false, "Local server not connected. Start the server to move files safely.");
+  }
+  updateControls();
+}
+
+function isLocalHttpApp() {
+  return location.protocol === "http:" && /^(localhost|127\.0\.0\.1)$/i.test(location.hostname);
+}
+
+function setBackendStatus(connected, message) {
+  state.backend.connected = connected;
+  state.backend.message = message;
+  els.serverStatusButton.textContent = connected
+    ? (state.backend.rootConfigured ? "Local server connected" : "Choose Local Folder for File Moves")
+    : "Local server disconnected";
+  els.serverStatusButton.classList.toggle("connected", connected);
+  els.serverStatusButton.classList.toggle("disconnected", !connected);
+  els.serverStatusButton.title = message;
+}
+
+async function configureBackendRoot() {
+  if (!isLocalHttpApp()) {
+    addLog("Local server not connected. Start the server and open http://localhost:3000 to move files safely.", "warn");
+    return;
+  }
+
+  try {
+    setBackendStatus(true, "Opening folder picker...");
+    const data = await apiRequest("/choose-folder");
+    state.backend.rootConfigured = true;
+    state.backend.rootPath = data.rootPath || "";
+    setBackendStatus(true, `Local server connected: ${state.backend.rootPath}`);
+    addLog(`Local backend root set to ${state.backend.rootPath}.`);
+  } catch (error) {
+    state.backend.rootConfigured = false;
+    setBackendStatus(true, "Browser security prevents automatic folder path detection. Click Choose Local Folder and select the same folder you scanned.");
+    addLog(`Folder picker was not completed: ${error.message}`, "warn");
+  }
+  updateControls();
+}
+
+function maybeSuggestLocalFolderPicker() {
+  if (!isLocalHttpApp() || !state.backend.connected || state.backend.rootConfigured) return;
+  addLog("Browser security prevents automatic folder path detection. Click Choose Local Folder and select the same folder you scanned.", "warn");
+  setBackendStatus(true, "Browser security prevents automatic folder path detection. Click Choose Local Folder and select the same folder you scanned.");
+}
+
+async function apiRequest(path, payload = {}) {
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data.ok === false) {
+    throw new Error(data.error || `HTTP ${response.status}`);
+  }
+  return data;
 }
 
 function updateProgressValue(element, value) {
@@ -2126,6 +2717,7 @@ function pulseProgressArea(element) {
 function addLog(message, type = "info") {
   const entry = document.createElement("div");
   entry.className = `log-entry ${type}`;
+  entry.title = message;
   const time = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
   entry.innerHTML = `<span class="log-time">${time}</span>`;
   entry.append(document.createTextNode(message));
@@ -2174,20 +2766,14 @@ function clearWorkingState() {
 
 function resetUi() {
   els.parentList.innerHTML = "";
-  els.previewBody.innerHTML = '<tr><td colspan="8" class="empty-state">Load a folder to review backed-up files.</td></tr>';
+  els.previewBody.innerHTML = '<tr><td colspan="8" class="empty-state">Load a folder or ZIP to review files.</td></tr>';
   els.folderSummary.textContent = "No folder loaded.";
   els.previewCount.textContent = "0 flagged";
   els.zipInfo.textContent = "Report will be available after files are moved to Review Bin.";
   setStatus("Waiting for a folder.");
   setProgress(0);
-  els.totalFiles.textContent = "0";
-  els.completedFiles.textContent = "0";
-  els.remainingFiles.textContent = "0";
-  els.elapsedTime.textContent = "00:00";
-  els.etaTime.textContent = "--:--";
-  els.filesPerSecond.textContent = "0.0";
-  els.flaggedStorage.textContent = "0 B";
   els.recoveredStorage.textContent = "0 B";
+  updateCleanupMetrics();
   els.reviewSearch.value = "";
   els.reviewSort.value = "group";
   renderReviewFilterOptions();
@@ -2195,8 +2781,9 @@ function resetUi() {
   els.downloadPdfButton.disabled = true;
   els.discardButton.textContent = "Move to Review Bin";
   els.groupBackupsButton.textContent = "Group Backups Into One Folder";
+  els.downloadGroupedFolderButton.textContent = "Download Grouped Folder";
   els.restoreButton.textContent = "Recover All";
-  els.permanentDeleteButton.textContent = "Permanently Delete All";
+  els.permanentDeleteButton.textContent = "Delete All";
   renderReviewBin();
   els.downloadExcelButton.textContent = "Download CSV Report";
   els.downloadPdfButton.textContent = "Download PDF Report";
@@ -2260,6 +2847,11 @@ async function readDirectoryHandle(directoryHandle, prefix, files, counter) {
 }
 
 async function filesFromDrop(dataTransfer) {
+  const droppedFiles = Array.from(dataTransfer.files || []);
+  if (droppedFiles.some(isZipFile)) {
+    return droppedFiles;
+  }
+
   const items = Array.from(dataTransfer.items || []);
   const entries = items
     .map(item => item.webkitGetAsEntry ? item.webkitGetAsEntry() : null)
@@ -2274,65 +2866,181 @@ async function filesFromDrop(dataTransfer) {
     return files;
   }
 
-  return Array.from(dataTransfer.files || []);
+  return droppedFiles;
 }
 
 async function expandUploadFiles(files) {
+  const zipResults = [];
   const expanded = [];
   for (const file of Array.from(files || [])) {
     if (isZipFile(file)) {
-      const zipFiles = await filesFromZip(file);
-      if (zipFiles.length) {
-        expanded.push(...zipFiles);
-        continue;
-      }
+      const zipResult = await filesFromZip(file);
+      zipResults.push(zipResult);
+      expanded.push(...zipResult.files);
+      continue;
     }
     expanded.push(file);
   }
-  return expanded;
+  return {
+    files: expanded,
+    zipCount: zipResults.length,
+    zipResults
+  };
 }
 
 function isZipFile(file) {
-  return /\.zip$/i.test(file.name || "") || file.type === "application/zip" || file.type === "application/x-zip-compressed";
+  const type = String(file.type || "").toLowerCase();
+  return /\.zip$/i.test(file.name || "") || type === "application/zip" || type === "application/x-zip-compressed";
 }
 
 async function filesFromZip(file) {
   const Zip = window.JSZip || globalThis.JSZip;
+  const result = {
+    name: file.name || "ZIP file",
+    files: [],
+    totalEntries: 0,
+    extracted: 0,
+    supportedEntries: 0,
+    failed: false
+  };
+
   if (!Zip) {
     addLog(`ZIP support is unavailable, so ${file.name} could not be extracted.`, "warn");
-    return [];
+    result.failed = true;
+    return result;
   }
 
   try {
-    setStatus(`Extracting ${file.name}...`);
+    setStatus("Reading ZIP...");
+    addLog(`Reading ZIP: ${result.name}...`);
     const zip = await Zip.loadAsync(file);
     const zipRoot = sanitizeFileName(getBaseName(file.name) || "ZIP_Upload");
     const entries = Object.values(zip.files).filter(entry => !entry.dir);
-    const extracted = [];
+    result.totalEntries = entries.length;
 
+    if (!entries.length) {
+      addLog(`${result.name} is empty or only contains folders.`, "warn");
+      return result;
+    }
+
+    setStatus("Scanning ZIP contents...");
     for (let start = 0; start < entries.length; start += SCAN_BATCH_SIZE) {
       const batch = entries.slice(start, start + SCAN_BATCH_SIZE);
       for (const entry of batch) {
         const entryPath = normalizePath(entry.name);
         if (!entryPath || isSystemFile(entryPath)) continue;
         const blob = await entry.async("blob");
+        const name = entryPath.split("/").pop() || file.name || "ZIP entry";
+        const lastModified = entry.date instanceof Date
+          ? entry.date.getTime()
+          : file.lastModified || Date.now();
         const extractedFile = new File([blob], entryPath.split("/").pop() || file.name, {
           type: blob.type || "",
-          lastModified: file.lastModified || Date.now()
+          lastModified
         });
-        extractedFile.relativePath = normalizePath(`${zipRoot}/${entryPath}`);
-        extracted.push(extractedFile);
+        const fullPath = normalizePath(`${zipRoot}/${entryPath}`);
+        extractedFile.relativePath = fullPath;
+        result.files.push({
+          file: extractedFile,
+          name,
+          path: fullPath,
+          fullPath,
+          size: blob.size || entry._data?.uncompressedSize || 0,
+          extension: getExtension(name),
+          lastModified
+        });
+        result.extracted += 1;
+        if (describeFileType(getExtension(name)).category !== "unsupported") {
+          result.supportedEntries += 1;
+        }
       }
-      setStatus(`Extracting ${file.name}: ${Math.min(entries.length, start + batch.length)} files...`);
+      setStatus(`Scanning ZIP contents: ${Math.min(entries.length, start + batch.length)} files...`);
       await yieldToBrowser();
     }
 
-    addLog(`Extracted ${extracted.length} files from ${file.name}.`);
-    return extracted;
+    if (!result.extracted) {
+      addLog(`${result.name} did not contain usable files after hidden system files were ignored.`, "warn");
+    } else {
+      setStatus(`Found ${result.extracted} files in ZIP.`);
+      addLog(`Found ${result.extracted} files in ZIP.`);
+    }
+    return result;
   } catch (error) {
     addLog(`Could not extract ${file.name}: ${error.message}.`, "error");
-    return [];
+    result.failed = true;
+    return result;
   }
+}
+
+async function downloadGroupedFolder() {
+  const Zip = window.JSZip || globalThis.JSZip;
+  if (!Zip) {
+    addLog("Grouped folder download needs JSZip, but ZIP support is unavailable.", "error");
+    return;
+  }
+
+  const rows = state.flaggedRows.filter(row => state.groupedBackupIds.has(row.id) && !state.permanentlyDeletedIds.has(row.id));
+  if (!rows.length) {
+    addLog("Prepare backup grouping before downloading the grouped folder.", "warn");
+    updateControls();
+    return;
+  }
+
+  try {
+    els.downloadGroupedFolderButton.disabled = true;
+    els.downloadGroupedFolderButton.textContent = "Preparing Download...";
+    const folderName = groupedBackupFolderName();
+    const zip = new Zip();
+    const usedNames = new Set();
+
+    for (const row of rows) {
+      const fileName = uniqueGroupedFileName(row, usedNames);
+      zip.file(`${folderName}/${fileName}`, row.file);
+    }
+
+    const blob = await zip.generateAsync({ type: "blob", compression: "DEFLATE" });
+    downloadBlob(blob, `${folderName}.zip`);
+    addLog(`Grouped backup folder download started with ${rows.length} files.`);
+    els.zipInfo.textContent = `Downloaded grouped backup folder with ${rows.length} files.`;
+  } catch (error) {
+    addLog(`Grouped backup folder could not be downloaded: ${error.message}.`, "error");
+  } finally {
+    els.downloadGroupedFolderButton.textContent = "Download Grouped Folder";
+    updateControls();
+  }
+}
+
+function downloadBlob(blob, fileName) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  link.style.display = "none";
+  document.body.appendChild(link);
+  link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function groupedBackupFolderName() {
+  return `${sanitizeFileName(state.mainFolderName || "Selected_Folder")}_Grouped_Backups`;
+}
+
+function uniqueGroupedFileName(row, usedNames) {
+  const cleanName = sanitizeFileName(row.fileName || row.file?.name || "backup-file");
+  const dot = cleanName.lastIndexOf(".");
+  const base = dot > 0 ? cleanName.slice(0, dot) : cleanName;
+  const ext = dot > 0 ? cleanName.slice(dot) : "";
+  let candidate = cleanName;
+  let index = 2;
+
+  while (usedNames.has(candidate.toLowerCase())) {
+    candidate = `${base}_${index}${ext}`;
+    index += 1;
+  }
+
+  usedNames.add(candidate.toLowerCase());
+  return candidate;
 }
 
 function readEntry(entry, prefix, files) {
@@ -2432,12 +3140,30 @@ function backupFileInfo(fileName) {
     };
   }
 
+  const baseName = getBaseName(fileName);
+  const namedBackup = baseName.toLowerCase().match(/^(.*?)(?:[_\s-]+(?:autosave|auto-save|backup|back up|recovered|recovery|temp|temporary))$/);
+  if (namedBackup && namedBackup[1]) {
+    return {
+      suffix: "backup-name",
+      primaryExtension: "",
+      detail: "Backup/autosave file related to primary source",
+      sourceBaseName: normalizeComparableName(namedBackup[1])
+    };
+  }
+
   return null;
 }
 
 function backupSourceBaseName(fileName, suffix) {
   const withoutSuffix = fileName.slice(0, fileName.length - suffix.length);
-  return normalizeComparableName(getBaseName(withoutSuffix) || withoutSuffix);
+  return normalizeBackupCandidateName(getBaseName(withoutSuffix) || withoutSuffix);
+}
+
+function normalizeBackupCandidateName(fileName) {
+  return normalizeComparableName(fileName)
+    .replace(/\b(?:autosave|auto save|backup|back up|recovered|recovery|temp|temporary)\b/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function describeFileType(extension) {
@@ -2512,6 +3238,15 @@ function escapeXml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&apos;");
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
 }
 
 function formatDate(timestamp) {
